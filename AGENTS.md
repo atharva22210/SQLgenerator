@@ -1,30 +1,93 @@
-# Repository instructions
+# Team workflow for coding agents
 
-## Keep the working branch current with main
+These instructions apply throughout this repository. Keep contributions small,
+reviewable, and safe for teammates working in parallel.
 
-For every code-change task, and immediately before creating any commit or
-pushing changes:
+## Understand the task and preserve existing work
 
-1. Inspect `git status` and the current branch. Preserve all existing user
-   changes; never discard them or automatically stash them.
-2. Run `git fetch origin`. Use the freshly fetched `origin/main` as the source
-   of truth, rather than the local `main` branch.
-3. Run `git rev-list --count HEAD..origin/main`. The result must be `0` before
-   making requested changes, creating a commit, or pushing.
-4. If the count is greater than zero, merge `origin/main` into the working
-   branch with `git merge origin/main`. The user authorizes this routine sync
-   and its merge commit. Prefer merging to rebasing shared branches; never
-   force-push to satisfy this rule. Recheck the count after merging.
-5. Resolve merge conflicts carefully and run checks appropriate to the merged
-   changes. If existing uncommitted work prevents a safe merge, conflicts need
-   user decisions, or fetching fails, explain the blocker and obtain the needed
-   input or access before continuing dependent work. Never claim the branch is
-   current when it could not be verified.
+- Read relevant code, documentation, and any more specific `AGENTS.md` before
+  editing. Inspect `git status`, the active branch, and staged changes.
+- Ask the user when requirements or intended behavior are unclear in a way
+  that affects correctness, scope, data, or a public interface. Routine choices
+  consistent with the task and existing conventions may proceed.
+- Preserve existing user changes and staged work. Never discard, overwrite,
+  automatically stash, or include unrelated changes in a commit.
+- Do not run destructive Git commands, rewrite shared history, or force-push
+  without explicit user authorization.
 
-If the current branch is `main`, create a task branch from the updated main
-history before implementing changes. Do not automatically push or merge a
-pull request unless the user's task authorizes it.
+## Stay current with main
 
-This check guarantees zero commits behind the last fetched `origin/main`.
-Another contributor may update GitHub's `main` afterward, so fetch and check
-again at each checkpoint above. Report the verified sync status when finishing.
+Before starting edits for each task, immediately before each commit, and
+immediately before each push:
+
+1. Run `git fetch origin`. Use freshly fetched `origin/main`, not a possibly
+   stale local `main`, as the shared baseline.
+2. Run `git rev-list --count HEAD..origin/main`. Require a result of `0`.
+3. If behind, merge `origin/main` into the working branch. Routine conflict-free
+   synchronization and its merge commit are authorized by this workflow. Prefer
+   merging over rebasing a shared branch.
+4. Verify the count again after synchronization and check the resulting diff.
+   Run appropriate checks if merging changed application code.
+
+If fetching fails or local changes prevent a safe merge, explain the blocker
+and ask for the necessary input or access. Do not bypass the check, discard
+work, or claim synchronization succeeded.
+
+Zero behind refers to the last successful fetch. Another teammate can update
+GitHub's `main` afterward; repeat the check at each checkpoint above.
+
+## Always ask about merge conflicts
+
+- On any merge, rebase, cherry-pick, or stash conflict, stop dependent work and
+  ask the user how to proceed before editing conflict resolutions, choosing
+  either side, staging resolutions, or continuing the operation.
+- List the conflicted files, explain the competing changes in plain language,
+  and offer a recommended resolution for review. Do not assume one side wins,
+  even for a seemingly simple conflict.
+- After the user provides direction, resolve only the approved conflicts,
+  verify no unresolved files or conflict markers remain in the affected files,
+  and run relevant checks before completing the operation.
+
+## Use task branches and focused changes
+
+- Work on the user's designated task branch. For new work without a designated
+  branch, create a descriptive branch from updated `origin/main`, such as
+  `sanika/add-query-validation`. Branch names with slashes are naming conventions,
+  not nested branches.
+- If currently on `main`, create a task branch before implementing changes.
+  Do not commit task changes directly to `main`.
+- Keep changes focused on the requested task and follow existing conventions.
+  Avoid unrelated refactors, dependency changes, or generated files.
+- Never commit credentials, tokens, private configuration, local environments,
+  or build artifacts. Use placeholders when documenting configuration.
+
+## Validate and commit
+
+- Review the complete diff and run checks appropriate to the change. For Python
+  model changes, run `python -m unittest discover -s tests` in an environment
+  with the required dependencies installed. Report skipped tests, missing
+  dependencies, and failures honestly.
+- For documentation-only changes, inspect the wording and commands and run
+  `git diff --check`; application tests are normally unnecessary.
+- Stage explicit paths, inspect `git diff --cached`, and ensure only intended
+  changes are included. Run `git diff --cached --check` before committing.
+- When a commit is requested, use an explicit message to avoid leaving Git
+  waiting for an interactive editor. Use an imperative summary such as
+  `docs: define team collaboration workflow`, plus a body explaining the reason
+  and material behavior changes when helpful.
+- Do not amend existing commits unless requested. Report the commit hash,
+  validation results, sync status, and whether changes remain local or were pushed.
+
+## Push, review, and merge
+
+- Push only when authorized by the user's task, to the intended remote branch.
+  A local commit does not publish changes, and pushing does not merge into main.
+- For authorized pull requests, use the task branch as the source and `main`
+  as the target. Inspect the entire PR diff, including changes from earlier
+  commits on the branch. Explain the problem, resulting behavior, and validation.
+- Request teammate review through the team's agreed process. Address feedback
+  with additional commits on the same branch. Do not approve your own work on
+  behalf of a teammate or bypass required reviews or checks.
+- Merge a PR only with explicit authorization and after required reviews,
+  checks, and conflicts are resolved. Do not delete shared branches without
+  authorization. Begin the next task from the latest main history.
