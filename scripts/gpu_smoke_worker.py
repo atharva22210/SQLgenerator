@@ -14,6 +14,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-gpus", type=int, choices=(1, 2), required=True)
     parser.add_argument("--result-dir", type=Path, required=True)
+    parser.add_argument("--expected-gpu-family", default="L4")
     args = parser.parse_args()
 
     rank = int(os.environ["RANK"])
@@ -28,8 +29,10 @@ def main() -> None:
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
     properties = torch.cuda.get_device_properties(device)
-    if "L4" not in properties.name.split():
-        raise RuntimeError(f"Expected an L4, received {properties.name}")
+    if args.expected_gpu_family != "any" and args.expected_gpu_family not in properties.name:
+        raise RuntimeError(
+            f"Expected a {args.expected_gpu_family}, received {properties.name}"
+        )
     print(
         f"rank={rank} local_rank={local_rank} world_size={world_size} "
         f"visible_gpus={count} device={device} name={properties.name}",
