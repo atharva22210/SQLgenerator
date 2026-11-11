@@ -1,5 +1,6 @@
 """Short Modal L4 checks. All GPU code runs remotely, not on the laptop."""
 
+import asyncio
 import json
 from pathlib import Path
 import subprocess
@@ -151,13 +152,59 @@ def track_results(results: list[dict], entity: str, project: str) -> str:
 
 
 def _call(function, *args, timeout: float):
-    """Bound queue/startup/execution waiting and cancel timed-out calls."""
+    """Connected local runner; cancellation depends on this client staying alive."""
     call = function.spawn(*args)
     try:
         return call.get(timeout=timeout)
     except TimeoutError:
         call.cancel(terminate_containers=True)
         raise
+
+
+async def _call_async(function, *args, timeout: float):
+    """Enforce a wall-clock wait and cancel the child on timeout or interruption."""
+    call = None
+    try:
+        async with asyncio.timeout(timeout):
+            call = await function.spawn.aio(*args)
+            print(f"Submitted child call {call.object_id}", flush=True)
+            return await call.get.aio()
+    except BaseException:
+        if call is not None:
+            try:
+                await asyncio.wait_for(
+                    call.cancel.aio(terminate_containers=True), timeout=30
+                )
+            except Exception as error:
+                print(f"Child cancellation could not be confirmed: {error}", flush=True)
+        raise
+
+
+@app.function(
+    image=tracking_image, cpu=0.25, memory=1024, timeout=1200,
+    startup_timeout=120, scaledown_window=2,
+)
+async def verify_dual_l4(
+    wandb_entity: str = "", wandb_project: str = "sqlgen-infra",
+    gpu_wait_seconds: int = 600,
+) -> str:
+    """Run the two-L4 verification from a CPU controller that can be detached."""
+    if not wandb_entity:
+        raise ValueError("--wandb-entity is required")
+    if not 1 <= gpu_wait_seconds <= 600:
+        raise ValueError("--gpu-wait-seconds must be between 1 and 600")
+
+    print("Remote CPU controller: checking W&B access...", flush=True)
+    await _call_async(prepare_tracking, wandb_entity, wandb_project, timeout=180)
+    print(f"Requesting two L4s; total GPU call wait is {gpu_wait_seconds}s...", flush=True)
+    result = await _call_async(dual_l4, timeout=gpu_wait_seconds)
+    print(json.dumps({"gpu_result": result}, indent=2), flush=True)
+    url = await _call_async(
+        track_results, [result], wandb_entity, wandb_project, timeout=180
+    )
+    report = {"status": "passed", "gpu_result": result, "wandb_url": url}
+    print(json.dumps(report, indent=2), flush=True)
+    return json.dumps(report)
 
 
 @app.local_entrypoint()
