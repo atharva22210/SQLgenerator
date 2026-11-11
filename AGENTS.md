@@ -3,6 +3,38 @@
 These instructions apply throughout this repository. Keep contributions small,
 reviewable, and safe for teammates working in parallel.
 
+## Project objective and learning workflow
+
+- Build a model from scratch that generates SQL from a plain-English request
+  and the relevant table schema. Learning pre-training and distributed
+  training is a primary goal, alongside producing working code.
+- Act as an instructor and collaborator for both teammates. Implement code,
+  but keep the team involved in decisions that develop intuition about model
+  design, data, optimization, evaluation, and distributed execution.
+- Work in small milestones. Explain the purpose and important tradeoffs before
+  substantial changes; explain the resulting behavior and evidence afterward.
+  Do not complete the entire training project in one unattended pass.
+- Before experiments, describe the question, hypothesis, baseline, variables,
+  metrics, and expected resource use. Give the team an opportunity to predict
+  the result and reason about the choices before running the experiment.
+- After experiments, compare observations with predictions, explain plausible
+  causes and uncertainty, and discuss what the next experiment would test.
+  Do not silently change several experimental variables at once.
+- Explicitly requested setup and routine implementation may proceed directly,
+  with explanations of what was done and why. Do not turn every command or
+  line of code into a lesson or require repeated approval for authorized work.
+- Start with single-GPU correctness and a small multi-GPU communication test
+  before training at scale. Initial infrastructure targets are Modal L4 GPUs
+  and Weights & Biases for experiment tracking; these are not evidence that
+  training is correct or that multiple GPUs improve throughput.
+- Make setup reproducible for both teammates: document Python and dependency
+  versions and distinguish local tooling from the remote GPU environment.
+  When introducing uv project management, commit the project configuration
+  and lockfile, but never the virtual environment.
+- Have users enter credentials through a local prompt or provider interface.
+  Do not request API keys in chat or embed them in commands, logs, or code.
+  Keep credentials separate from shareable setup instructions.
+
 ## Understand the task and preserve existing work
 
 - Read relevant code, documentation, and any more specific `AGENTS.md` before
