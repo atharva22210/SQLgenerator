@@ -1,8 +1,8 @@
 # SQLgenerator
 
-A learning project for training an autoregressive text-to-SQL model from
+A learning project for training an autoregressive text-to-MySQL model from
 scratch, with an emphasis on pre-training and distributed execution. The
-tokenizer, dataset, SQL dialect, and prompt format are still to be chosen.
+tokenizer, dataset, and prompt format are still to be chosen.
 
 ## Setup
 
@@ -68,6 +68,93 @@ uv run --locked modal run --env main --profile sanika-05 modal_smoke.py --gpus n
 
 This creates a tracking-only run with `tracking_connected=true` and
 `gpu_checks_run=0`; it makes no claim that GPU checks passed.
+
+## MySQL sandbox and eval checks
+
+The local and remote environments use the locked PyMySQL, cryptography,
+DBUtils and python-dotenv dependencies. Run `uv sync --locked` after updating.
+Copy `.env.example` to `.env` and fill in your six MySQL fields locally.
+`.env` and `.env.*` are ignored; the empty `.env.example` is the only exception.
+Existing environment variables (including Modal Secrets) take precedence over
+the optional repo-root `.env`, regardless of your current working directory.
+
+Download your service's CA certificate from Aiven and set
+`MYSQL_SSL_CA=~/Downloads/ca.pem` in `.env`, or pass `--ca` before a subcommand.
+TLS requires a valid certificate and matching hostname, with TLS 1.2 or later.
+There is no insecure TLS fallback. `MYSQL_SSL_CA_PEM` accepts certificate text
+and takes precedence over the local path, so the same client works in Modal.
+If neither CA setting is supplied, the system trust store is used.
+
+From the repository root:
+
+```bash
+uv run --locked python -m infra.verify_mysql_setup init-admin
+uv run --locked python -m infra.verify_mysql_setup test-read
+uv run --locked python -m infra.verify_mysql_setup test-modal-gpu --profile sanika-05 --env main
+```
+
+`init-admin` creates `sandbox_db`, `team_check`, an initial row, and an empty
+`__sqlgen_drop_probe` table without replacing existing rows. It creates
+`MYSQL_EVAL_USER` at host `%` if absent, requires SSL, and grants only `SELECT`
+and `SHOW VIEW` on this database. MySQL users are accounts, separate from the
+rows in `team_check`. Database-name wildcard handling respects MySQL's
+`partial_revokes` setting so `sandbox_db` does not match other databases.
+Existing eval passwords are preserved; `.env` must match the account's password.
+Broader existing grants or roles cause setup to stop for manual review; setup
+never revokes permissions belonging to another workflow. Each statement commits
+independently, and MySQL DDL implicitly commits, so setup is rerunnable but not
+atomic. Use a dedicated eval account, distinct from admin.
+
+`CREATE USER` and `GRANT` apply without a flush. If explicitly needed, use
+`init-admin --flush-privileges`; managed services may restrict that operation.
+See [MySQL's FLUSH documentation](https://dev.mysql.com/doc/refman/8.0/en/flush.html).
+
+`test-read` connects only as eval, verifies encryption and narrow grants,
+prints rows from `sandbox_db.team_check`, and attempts to drop the empty probe.
+Only MySQL error **1142** counts as a successful denial. Other errors fail the
+check. An unexpectedly successful DROP fails the check and removes only the
+disposable probe; rerun `init-admin` after correcting permissions. A SELECT and
+denied DROP are an infrastructure check, not a complete SQL evaluation sandbox.
+
+For the GPU command, create a Modal Secret named **`mysql-eval-secret`** in
+workspace `sanika-05`, environment `main`, using the provider dashboard or a
+local credential prompt. Include only `MYSQL_HOST`, `MYSQL_PORT`,
+`MYSQL_EVAL_USER`, `MYSQL_EVAL_PASS`, and `MYSQL_SSL_CA_PEM` (the full contents
+of your CA certificate). The existing `mysql-secret` contains admin credentials
+and is intentionally not used for eval GPU jobs. Never upload `.env` or the
+admin password to an eval image. `--secret-name` selects another eval-only
+Secret; `--profile` selects your local alias for the shared workspace.
+
+The Modal check runs the same `test_read()` on one L4, falling back to one A10.
+It checks the GPU with `nvidia-smi`; no PyTorch/CUDA Python packages, training,
+W&B or Volume are needed. The image installs the locked project dependencies
+without the model group and includes only the `infra` Python package. Each
+remote invocation has a 120-second execution timeout; the caller waits at most
+240 seconds after submission and cancels an unfinished call. Image build and
+startup have separate lifetimes. The result includes the GPU, TLS cipher,
+rows and permission error code. This verifies database access from that GPU
+container, not multi-GPU communication or training throughput.
+
+Reuse the client in Python:
+
+```python
+import pymysql
+from infra.db_client import execute_query
+
+try:
+    rows = execute_query("SELECT * FROM sandbox_db.team_check WHERE id = %s", (1,))
+except pymysql.Error as exc:
+    mysql_error_code = exc.args[0]
+```
+
+Eval is the default; setup can explicitly pass `mode="admin"`. Each process
+uses a separate lazy pool per mode, with at most four dedicated connections;
+exhaustion raises instead of waiting indefinitely. Queries commit on success,
+roll back on error, and return connections to the pool. `execute_query` accepts
+one statement, returns dictionaries (`[]` for statements with no result), and
+preserves original PyMySQL exceptions. `connection(mode)` supports multiple
+statements in one transaction; `close_pools()` releases idle connections. Create
+pools after forking, and close pools before changing connection configuration.
 
 ## Shared-volume check
 
