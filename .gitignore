@@ -9,6 +9,8 @@ checkpoints/
 *.pt
 *.pth
 wandb/
+# Downloaded tokenizer artifacts are reproducible outputs, not source files.
+data/tokenizer/
 # Credentials stay local; only the empty template is shared.
 .env
 .env.*
