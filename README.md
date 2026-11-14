@@ -156,6 +156,128 @@ preserves original PyMySQL exceptions. `connection(mode)` supports multiple
 statements in one transaction; `close_pools()` releases idle connections. Create
 pools after forking, and close pools before changing connection configuration.
 
+## Day 4: verified post-training data
+
+`data/ingest_mysql_benchmarks.py` streams
+[`gretelai/synthetic_text_to_sql`](https://huggingface.co/datasets/gretelai/synthetic_text_to_sql)
+at pinned revision `740ab236e64503fba51be1101df7a1be83bf455d`. The source has
+100,000 train rows and 5,851 test rows. It executes each selected row's original
+`sql_context` using admin credentials, then its original answer `sql` using
+the existing eval-only account in a read-only transaction. It does not
+transpile SQL, add primary keys, fix queries, or validate the meaning of answers.
+A successful empty result is valid execution evidence.
+
+The approved shared server reports **MySQL 8.4.11**, rather than the curriculum's
+8.0. Outputs record the actual version and SQL mode; they do not certify 8.0
+compatibility. `ONLY_FULL_GROUP_BY` must remain enabled. Aiven requires primary
+keys by default; ingestion uses its documented
+[`SET SESSION sql_require_primary_key = 0`](https://aiven.io/docs/products/mysql/howto/create-tables-without-primary-keys)
+for admin connections to create these small synthetic tables. The service's
+global setting stays unchanged.
+
+The new shared v2 Volume is **`post-train-data`**, mounted at `/vol`:
+
+| Path inside the container | Verified rows | Source | Live MySQL database |
+| --- | ---: | --- | --- |
+| `/vol/posttrain_data/sft_train_45k.parquet` | 45,000 | train | No; temporary schemas are reused and removed |
+| `/vol/posttrain_data/rl_train_2000.parquet` | 2,000 | train, after SFT selection | Yes |
+| `/vol/posttrain_data/eval_test_500.parquet` | 500 | test | Yes |
+
+Test rows are selected first so their exact context hashes can be excluded
+from both training outputs. SFT and RL follow source order; RL also excludes
+contexts used by SFT. Exact `(prompt, context, SQL)` duplicates are excluded.
+This prevents identical-context leakage across splits, not every possible
+semantic duplicate. No shuffling or SQL repair is applied. Unsupported
+non-SELECT answers, unsafe contexts, parser failures, and MySQL SQL/data errors
+are logged in `validation.jsonl`. Unsupported stored-function calls also fail
+validation (error 1370); eval is never granted EXECUTE. Authentication,
+database/table permission, network, quota, and storage
+failures stop ingestion. If a source is exhausted before the target count,
+the job fails rather than publishing undersized datasets.
+
+Each Parquet row retains all source columns and adds `source_split`,
+`source_index`, `dataset_revision`, `context_sha256`, `db_name`, and
+`result_row_count`. SFT `db_name` is null. Live names use the run's isolated
+namespace, such as `dbpt012345abcdefxtrain000001`; consumers must read `db_name`
+rather than assume consecutive names. The eval account receives only SELECT
+and SHOW VIEW on each exact database, with no database-name wildcard grant.
+The existing permission checks recognize these exact ingestion names.
+
+Run `uv sync --locked` first. The remote job uses the same Python 3.13.15 and
+locked dependencies without the model group. It receives the existing
+`mysql-secret` and `mysql-eval-secret`; the latter must include CA PEM text
+as described above. No `.env`, personal token, GPU, or W&B run is uploaded or
+allocated. Four workers use up to nine MySQL connections plus a short-lived
+preflight connection; the smoke check below uses two workers. CPU, storage,
+and MySQL service usage still apply. Containers use `ap-southeast` to stay near
+the Singapore database endpoint; Modal applies its region-selection pricing.
+Full runtime depends on database latency
+and rejection rate; it is not bounded by the curriculum's 75-minute estimate.
+
+First run a small end-to-end check in a separate Volume directory. Reuse its
+run ID to resume it; choose a fresh 12-character lowercase hex ID for a new check:
+
+```bash
+uv run --locked modal run --detach --env main --profile sanika-05 modal_posttrain.py --run-id d4c0ffee0001 --smoke --sft-rows 20 --rl-rows 2 --test-rows 2 --workers 2
+```
+
+Its validation checkpoints go to `/vol/checks/d4c0ffee0001/`. To publish and
+independently verify those smoke Parquet files after reviewing their counts:
+
+```bash
+uv run --locked modal run --env main --profile sanika-05 modal_posttrain.py --run-id d4c0ffee0001 --smoke --sft-rows 20 --rl-rows 2 --test-rows 2 --workers 2 --publish-only
+```
+
+Smoke RL/test databases remain available for checks. The full run uses
+`/vol/posttrain_data/`:
+
+```bash
+uv run --locked modal run --detach --env main --profile sanika-05 modal_posttrain.py --run-id d4c0ffee0002 --submit-only
+```
+
+This command validates only. Once all targets are reached, it writes the actual
+filtered counts to `ready.json` and leaves the final Parquet files unwritten.
+`--submit-only` prints the Function Call ID and exits the local launcher while
+the detached remote job runs. Inspect `progress.json` or the App dashboard for
+progress; `ready.json` is written only after validation finishes successfully.
+Report/review those counts before publishing. Publication uses only the accepted
+rows in the validation ledger; rejected rows and checkpoints are not included
+in any Parquet dataset:
+
+```bash
+uv run --locked modal volume get post-train-data posttrain_data/ready.json - --env main --profile sanika-05
+uv run --locked modal run --detach --env main --profile sanika-05 modal_posttrain.py --run-id d4c0ffee0002 --publish-only
+```
+
+Keep the run ID. The same command resumes from the last complete ledger entry
+after failure; the output's config must match. Run-scoped pending databases
+are checkpointed before creation so recovery can remove only unfinished
+databases owned by that run. A server-side ingestion lock prevents simultaneous
+runs from modifying the data. Existing unrelated databases are preserved.
+The ledger and `progress.json` are committed every batch (up to 1,000 SFT
+candidates or 100 RL/test candidates). A failure can require replaying the
+unfinished batch. Final Parquet files
+are published only after reaching every requested count, with hashes and the
+server details in `manifest.json`.
+
+After ingestion, an independent container mounts the Volume read-only, checks
+all file hashes, row counts, and split disjointness, and reruns all 2,500 live
+queries with eval-only credentials. Repeat it without ingestion:
+
+```bash
+uv run --locked modal run --env main --profile sanika-05 modal_posttrain.py --verify-only
+uv run --locked modal volume get post-train-data posttrain_data/progress.json - --env main --profile sanika-05
+uv run --locked modal volume get post-train-data posttrain_data/manifest.json - --env main --profile sanika-05
+```
+
+`manifest.json` establishes that ingestion finished; inspect the independent
+verification result to confirm the retained databases are still accessible.
+To verify the smoke output, add `--smoke --run-id d4c0ffee0001` to the
+`--verify-only` command. For a local run with the repo's ignored `.env`, use
+`uv run --locked python -m data.ingest_mysql_benchmarks --output artifacts/posttrain_data --run-id 012345abcdef`.
+Add `--validate-only` to that local command to separate validation from writing
+Parquet files. Local output is not automatically uploaded to Modal.
+
 ## Shared-volume check
 
 Both teammates must access workspace `sanika-05`, environment `main`, and the

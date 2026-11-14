@@ -34,7 +34,12 @@ def check_eval_grants(rows: list[dict], *, partial_revokes: bool = False) -> Non
         database = "sandbox_db" if partial_revokes else r"sandbox\_db"
         # Aiven can enable ANSI_QUOTES, so SHOW GRANTS may use double quotes.
         expected = {f"`{database}`.*", f'"{database}".*', f"{database}.*"}
-        if target not in expected:
+        # Day 4 grants are exact, run-scoped databases. Their names contain no
+        # MySQL wildcard characters under either partial_revokes setting.
+        ingestion = re.fullmatch(
+            r'[`"]?(dbpt[0-9a-f]{12}x(?:train|test|work)[0-9]{6})[`"]?\.\*', target,
+        )
+        if target not in expected and not ingestion:
             raise RuntimeError("Eval account has grants outside the exact sandbox database.")
         if not privileges <= {"SELECT", "SHOW VIEW"}:
             raise RuntimeError("Eval account has write privileges; review SHOW GRANTS as admin.")
