@@ -11,6 +11,11 @@ reviewable, and safe for teammates working in parallel.
 - Act as an instructor and collaborator for both teammates. Implement code,
   but keep the team involved in decisions that develop intuition about model
   design, data, optimization, evaluation, and distributed execution.
+- Because this is a learning project, add comments and docstrings at important
+  decision points in new code. Explain the purpose, assumptions, data shapes,
+  and tradeoffs behind non-obvious logic; do not merely narrate obvious syntax.
+  When behavior could surprise a learner, include a small example or state the
+  invariant the code is preserving.
 - Work in small milestones. Explain the purpose and important tradeoffs before
   substantial changes; explain the resulting behavior and evidence afterward.
   Do not complete the entire training project in one unattended pass.
