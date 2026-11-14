@@ -9,5 +9,7 @@ checkpoints/
 *.pt
 *.pth
 wandb/
+# Credentials stay local; only the empty template is shared.
 .env
 .env.*
+!.env.example
