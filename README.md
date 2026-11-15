@@ -1,8 +1,9 @@
 # SQLgenerator
 
 A learning project for training an autoregressive text-to-MySQL model from
-scratch, with an emphasis on pre-training and distributed execution. The
-tokenizer, dataset, and prompt format are still to be chosen.
+scratch, with an emphasis on pre-training and distributed execution. The first
+tokenizer and pretraining corpus are documented in the data preparation code.
+For the single-GPU batching comparison, see [Day 5 pretraining](docs/day5-pretraining.md).
 
 ## Setup
 
