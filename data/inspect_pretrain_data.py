@@ -141,11 +141,14 @@ def inspect(split: str, samples_per_source: int, max_chars: int) -> dict:
             start = end + 1
         examples[source] = rows
 
-    return {"split": split, "tokenizer": str(_tokenizer_path()), "examples": examples}
+    result = {"split": split, "tokenizer": str(_tokenizer_path()), "examples": examples}
+    # Print inside the Modal function so the decoded examples appear in its
+    # Logs tab, including when the local terminal is no longer available.
+    print(json.dumps(result, indent=2, ensure_ascii=False), flush=True)
+    return result
 
 
 @app.local_entrypoint()
 def main(split: str = "val", samples_per_source: int = 2, max_chars: int = 2_000) -> None:
     """Run a read-only CPU inspection and print the decoded examples."""
-    result = inspect.remote(split, samples_per_source, max_chars)
-    print(json.dumps(result, indent=2, ensure_ascii=False), flush=True)
+    inspect.remote(split, samples_per_source, max_chars)
