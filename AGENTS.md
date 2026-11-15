@@ -16,6 +16,14 @@ reviewable, and safe for teammates working in parallel.
   and tradeoffs behind non-obvious logic; do not merely narrate obvious syntax.
   When behavior could surprise a learner, include a small example or state the
   invariant the code is preserving.
+- Write teaching code in small, named steps. For public functions, explain what
+  each argument controls, the expected input and output shapes or file format,
+  and how the step fits into the data-to-loss-to-update flow. At boundaries
+  such as document packing, masking, gradient accumulation, and checkpoints,
+  explain *why* the rule exists with a short example. Keep the implementation
+  readable enough that a teammate can trace one example through it; pair a
+  non-obvious invariant with a focused test. Keep comments accurate when code
+  or experiment assumptions change.
 - Work in small milestones. Explain the purpose and important tradeoffs before
   substantial changes; explain the resulting behavior and evidence afterward.
   Do not complete the entire training project in one unattended pass.
