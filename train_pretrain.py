@@ -6,14 +6,14 @@ W&B records the metrics. Training starts only when you run the command.
 
 Example (small correctness run before a longer comparison)::
 
-    uv run --locked modal run --env main --profile sanika-05 \
+    uv run --locked modal run --detach --env main --profile sanika-05 \
         train_pretrain.py --mode pad --max-steps 2 --warmup-steps 1 \
         --wandb-entity YOUR_WANDB_ENTITY
 
-The default batch is deliberately smaller than the photographed 8 x 2048
-recipe. With 151,670 vocabulary entries the tied embedding alone is about
-78 million parameters, so this is not a 35M-parameter model. Measure A10
-memory and throughput before increasing microbatch size or sequence length.
+Defaults target one A10: 4 x 2048 tokens per microbatch, two accumulation
+steps, and 128-position loss chunks. With 151,670 vocabulary entries the tied
+embedding alone is about 78 million parameters, so this is not a 35M model.
+Measure peak memory and throughput in a short correctness run first.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import os
 from pathlib import Path
 import random
 import time
+import uuid
 
 import modal
 
@@ -74,16 +75,16 @@ class TrainConfig:
 
     mode: str = "pad"
     sql_fraction: float = 0.5
-    micro_batch_size: int = 1
-    grad_accum_steps: int = 4
-    seq_len: int = 512
+    micro_batch_size: int = 4
+    grad_accum_steps: int = 2
+    seq_len: int = 2048
     max_steps: int = 500
     warmup_steps: int = 50
     lr_schedule: str = "cosine"
     eval_every: int = 50
     val_batches: int = 8
     seed: int = 42
-    loss_chunk_size: int = 64
+    loss_chunk_size: int = 128
     peak_lr: float = 6e-4
     min_lr: float = 6e-5
     weight_decay: float = 0.1
@@ -145,7 +146,7 @@ def _tokenizer_path() -> Path:
 def _load_data_and_tokenizer():
     """Require the completion metadata before trusting raw binary files."""
     from transformers import AutoTokenizer
-    from data.dataloader import Corpus, SQL_SOURCES
+    from data.dataloader import Corpus
 
     volume.reload()
     metadata_path = DATA_DIR / "metadata.json"
@@ -159,21 +160,52 @@ def _load_data_and_tokenizer():
         raise ValueError("Saved tokenizer vocabulary disagrees with corpus metadata")
     if tokenizer.eos_token_id != metadata["eos_token_id"] or tokenizer.pad_token_id is None:
         raise ValueError("Saved tokenizer needs matching EOS and a PAD token")
-    # EOS at the end of a file alone cannot prove a long interrupted run
-    # finished. Match every file's length to the completion metadata too.
-    for name in ("english", *SQL_SOURCES):
-        for split in ("train", "val"):
-            key = f"{name}_{split}"
-            path = DATA_DIR / f"{key}.bin"
-            expected_bytes = metadata["token_counts"][key] * 4
-            if not path.is_file() or path.stat().st_size != expected_bytes:
-                raise ValueError(f"{path} does not match completed metadata ({expected_bytes} bytes)")
-            checkpoint_path = DATA_DIR / f"{key}.bin.checkpoint.json"
-            if checkpoint_path.is_file() and not json.loads(checkpoint_path.read_text())["complete"]:
-                raise ValueError(f"{path} still has an unfinished preparation checkpoint")
+    _validate_corpus_files(DATA_DIR, metadata)
     train = Corpus(DATA_DIR, "train", tokenizer.eos_token_id)
     validation = Corpus(DATA_DIR, "val", tokenizer.eos_token_id)
     return tokenizer, train, validation
+
+
+def _validate_corpus_files(directory: Path, metadata: dict) -> None:
+    """Check durable file lengths and current preparation completion markers.
+
+    Pipeline v2 checkpoints both splits in one source marker. Its migration
+    deliberately leaves legacy split markers unchanged, so a completed v2
+    source can coexist with an old incomplete split snapshot. Prefer the
+    current source marker, checking its identity and both token counts; use
+    legacy markers only when the source marker does not exist.
+    """
+    from data.dataloader import SQL_SOURCES
+
+    for name in ("english", *SQL_SOURCES):
+        source_path = directory / f"{name}.checkpoint.json"
+        source = json.loads(source_path.read_text()) if source_path.is_file() else None
+        if source is not None:
+            expected = {"pipeline_version": metadata.get("pipeline_version"),
+                        "dtype": metadata["token_dtype"],
+                        "vocab_size": metadata["tokenizer_vocab_size"],
+                        "tokenizer_sha256": metadata.get("tokenizer_sha256"),
+                        "revision": metadata.get("dataset_revisions", {}).get(name)}
+            if any(source.get(key) != value for key, value in expected.items()):
+                raise ValueError(f"{source_path} disagrees with corpus metadata")
+        for split in ("train", "val"):
+            key = f"{name}_{split}"
+            path = directory / f"{key}.bin"
+            expected_tokens = metadata["token_counts"][key]
+            expected_bytes = expected_tokens * 4
+            if not path.is_file() or path.stat().st_size != expected_bytes:
+                raise ValueError(f"{path} does not match completed metadata ({expected_bytes} bytes)")
+            legacy_path = directory / f"{key}.bin.checkpoint.json"
+            progress = None
+            if source is not None:
+                progress = source["splits"][split]
+            elif legacy_path.is_file():
+                progress = json.loads(legacy_path.read_text())
+            if progress is not None:
+                if not progress["complete"]:
+                    raise ValueError(f"{path} still has an unfinished preparation checkpoint")
+                if progress["tokens_written"] != expected_tokens:
+                    raise ValueError(f"{path} checkpoint token count disagrees with corpus metadata")
 
 
 def _evaluate(model, corpus, config: TrainConfig, pad_id: int, device) -> dict[str, float]:
@@ -190,7 +222,7 @@ def _evaluate(model, corpus, config: TrainConfig, pad_id: int, device) -> dict[s
     results = {}
     for kind, offset in (("english", 10_000), ("sql", 20_000)):
         rng = random.Random(config.seed + offset)
-        total_loss, total_targets = 0.0, 0
+        total_loss, total_targets = torch.zeros((), device=device), 0
         with torch.no_grad():
             for _ in range(config.val_batches):
                 batch = make_batch(
@@ -202,9 +234,10 @@ def _evaluate(model, corpus, config: TrainConfig, pad_id: int, device) -> dict[s
                 # weights and optimizer state remain float32 for stable updates.
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     _, loss = model(**batch.model_inputs("pad", device), loss_chunk_size=config.loss_chunk_size)
-                total_loss += float(loss) * batch.predicted_tokens
+                total_loss += loss.detach() * batch.predicted_tokens
                 total_targets += batch.predicted_tokens
-        results[f"val/{kind}_loss"] = total_loss / total_targets
+        # One scalar read per corpus, not per validation microbatch.
+        results[f"val/{kind}_loss"] = float(total_loss / total_targets)
     model.train()
     return results
 
@@ -262,10 +295,12 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
     optimizer = torch.optim.AdamW(
         [{"params": decay, "weight_decay": config.weight_decay},
          {"params": no_decay, "weight_decay": 0.0}],
-        lr=config.peak_lr, betas=(0.9, 0.95), eps=1e-8,
+        lr=config.peak_lr, betas=(0.9, 0.95), eps=1e-8, fused=True,
     )
     path = _checkpoint_path(run_name)
-    start_update, cumulative_tokens, wandb_id = 0, 0, wandb.util.generate_id()
+    # Own the stable ID used by W&B and our checkpoint without depending on
+    # W&B's internal ID helper, which is not exposed by the pinned release.
+    start_update, cumulative_tokens, wandb_id = 0, 0, uuid.uuid4().hex
     if path.is_file():
         # Resume only the same experiment. A different mix or layout needs a
         # new run name, otherwise its optimizer history would contaminate it.
@@ -274,6 +309,10 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
             raise ValueError(f"Checkpoint config differs from this run: {path}")
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
+        # Loading restores param-group flags too. Older snapshots used the
+        # automatic implementation; keep this run's fused CUDA execution.
+        for group in optimizer.param_groups:
+            group["fused"] = True
         rng.setstate(state["python_rng"])
         torch.set_rng_state(state["torch_rng"].cpu())
         torch.cuda.set_rng_state(state["cuda_rng"])
@@ -292,6 +331,7 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
                                               "compute_dtype": "bfloat16", "parameter_dtype": "float32"},
         settings=wandb.Settings(init_timeout=120),
     ) as run:
+        torch.cuda.reset_peak_memory_stats()
         for update in range(start_update + 1, config.max_steps + 1):
             started = time.perf_counter()
             lr = learning_rate(update, config)
@@ -304,7 +344,7 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
                 pad_id=tokenizer.pad_token_id, rng=rng,
             ) for _ in range(config.grad_accum_steps)]
             target_count = sum(batch.predicted_tokens for batch in batches)
-            weighted_loss = 0.0
+            weighted_loss = torch.zeros((), device=device)
             for batch in batches:
                 # Training and validation both use bf16 autocast, whether the
                 # LR came from cosine or inverse-square-root decay.
@@ -316,24 +356,29 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
                 # predicted tokens across all accumulated microbatches.
                 weight = batch.predicted_tokens / target_count
                 (loss * weight).backward()
-                weighted_loss += float(loss.detach()) * weight
+                weighted_loss += loss.detach() * weight
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
             optimizer.step()
-            torch.cuda.synchronize()
+            # Metrics are the only scalar read in an update. Copy both after
+            # optimizer.step so timing includes completed GPU work, without a
+            # separate synchronize() or any reads between microbatches.
+            logged_loss, logged_grad_norm = torch.stack((weighted_loss, grad_norm)).tolist()
             elapsed = time.perf_counter() - started
             real_tokens = sum(batch.non_pad_tokens for batch in batches)
             sql_tokens = sum(batch.sql_tokens for batch in batches)
             cumulative_tokens += real_tokens
             slots = config.micro_batch_size * config.seq_len * config.grad_accum_steps
             metrics = {
-                "train/loss": weighted_loss,
-                "train/grad_norm": float(grad_norm),
+                "train/loss": logged_loss,
+                "train/grad_norm": logged_grad_norm,
                 "train/lr": lr,
                 "data/observed_sql_token_fraction": sql_tokens / real_tokens,
                 "perf/raw_tokens_per_sec": slots / elapsed,
                 "perf/effective_non_pad_tokens_per_sec": real_tokens / elapsed,
                 "perf/padding_waste_pct": 100 * (slots - real_tokens) / slots,
                 "perf/cumulative_non_pad_tokens": cumulative_tokens,
+                "perf/peak_allocated_gib": torch.cuda.max_memory_allocated() / 1024**3,
+                "perf/peak_reserved_gib": torch.cuda.max_memory_reserved() / 1024**3,
             }
             if update % config.eval_every == 0 or update == config.max_steps:
                 metrics.update(_evaluate(model, validation, config, tokenizer.pad_token_id, device))
@@ -358,14 +403,18 @@ def train_on_gpu(config: dict, wandb_entity: str, wandb_project: str, run_name: 
 @app.local_entrypoint()
 def main(
     mode: str = "pad", sql_fraction: float = 0.5,
-    micro_batch_size: int = 1, grad_accum_steps: int = 4, seq_len: int = 512,
+    micro_batch_size: int = 4, grad_accum_steps: int = 2, seq_len: int = 2048,
     max_steps: int = 500, warmup_steps: int = 50, lr_schedule: str = "cosine",
     eval_every: int = 50,
-    val_batches: int = 8, seed: int = 42, loss_chunk_size: int = 64,
+    val_batches: int = 8, seed: int = 42, loss_chunk_size: int = 128,
     wandb_entity: str = "", wandb_project: str = "sqlgen-day5",
-    run_name: str = "",
+    run_name: str = "", wait: bool = False,
 ) -> None:
-    """CLI arguments map directly to TrainConfig; change one for an experiment."""
+    """Submit and exit by default; use modal run --detach to keep the App alive.
+
+    ``--wait`` optionally retrieves the result for short debugging runs. It
+    does not change the independent lifetime of the spawned invocation.
+    """
     config = TrainConfig(
         mode=mode, sql_fraction=sql_fraction, micro_batch_size=micro_batch_size,
         grad_accum_steps=grad_accum_steps, seq_len=seq_len, max_steps=max_steps,
@@ -375,6 +424,12 @@ def main(
     )
     if not wandb_entity:
         raise ValueError("Supply --wandb-entity for W&B logging")
-    name = run_name or f"{mode}-{lr_schedule}-sql{sql_fraction:g}-seed{seed}"
+    name = run_name or f"{mode}-{lr_schedule}-prefix-sql{sql_fraction:g}-seed{seed}"
     _checkpoint_path(name)  # Validate before requesting a GPU.
-    print(json.dumps(train_on_gpu.remote(asdict(config), wandb_entity, wandb_project, name), indent=2))
+    call = train_on_gpu.spawn(asdict(config), wandb_entity, wandb_project, name)
+    print(json.dumps({"run": name, "call_id": call.object_id,
+                      "checkpoint": str(_checkpoint_path(name))}), flush=True)
+    if wait:
+        print(json.dumps(call.get(), indent=2))
+    else:
+        print("Submitted. Use modal run --detach so the App survives launcher exit.", flush=True)

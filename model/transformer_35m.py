@@ -22,7 +22,38 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
+from torch.nn.attention.varlen import varlen_attn
 from torch.utils.checkpoint import checkpoint
+
+
+@dataclass(frozen=True)
+class AttentionLayout:
+    """CPU-planned boundaries for attention over unpadded tokens.
+
+    ``token_indices`` indexes flattened [batch * time] storage. ``cu_seqlens``
+    is contiguous int32 [segments + 1], starting at zero and ending at the
+    number of selected tokens. For lengths (3, 2), it is [0, 3, 5].
+    ``sequence_lengths`` and ``max_seqlen`` stay as Python metadata: deriving
+    either from a CUDA tensor would force a device-to-host synchronization.
+    The loader validates this contract before transferring tensors to CUDA.
+    """
+
+    token_indices: Tensor
+    cu_seqlens: Tensor
+    max_seqlen: int
+    sequence_lengths: tuple[int, ...]
+
+    def dense_mask(self, batch: int, time: int) -> Tensor:
+        """Build a [batch, time, time] reference mask for CPU tests only."""
+        segments = torch.repeat_interleave(
+            torch.arange(len(self.sequence_lengths), device=self.token_indices.device),
+            torch.tensor(self.sequence_lengths, device=self.token_indices.device),
+            output_size=self.token_indices.numel(),
+        )
+        ids = segments.new_full((batch * time,), -1)
+        ids.index_copy_(0, self.token_indices, segments)
+        ids = ids.view(batch, time)
+        return ids[:, :, None] == ids[:, None, :]
 
 
 @dataclass(frozen=True)
@@ -95,25 +126,18 @@ class RMSNorm(nn.Module):
         return (x_float * inverse_rms * self.weight).to(dtype=x.dtype)
 
 
-def apply_rope(x: Tensor, position_ids: Tensor, theta: float) -> Tensor:
+def apply_rope(x: Tensor, cosine: Tensor, sine: Tensor) -> Tensor:
     """Rotate pairs in query/key heads according to token positions.
 
     Args:
         x: Query or key tensor of shape [batch, heads, time, head_dim].
-        position_ids: Token positions of shape [batch, time]. These may reset
-            to zero at document boundaries in a future packed data loader.
-        theta: Base controlling how quickly different pairs rotate.
+        cosine: Cached rotations, [batch, 1, time, head_dim // 2].
+        sine: Cached rotations with the same shape as cosine. One lookup per
+            forward is shared by queries, keys, and every layer.
 
     RoPE encodes position without adding a position vector to token embeddings.
     Each adjacent pair (a, b) becomes (a*cos-b*sin, a*sin+b*cos).
     """
-    head_dim = x.size(-1)
-    pair_numbers = torch.arange(0, head_dim, 2, device=x.device, dtype=torch.float32)
-    inverse_frequencies = theta ** (-pair_numbers / head_dim)
-    angles = position_ids.float()[..., None] * inverse_frequencies
-    # The inserted head axis broadcasts one position across all heads.
-    cosine = angles.cos()[:, None, :, :]
-    sine = angles.sin()[:, None, :, :]
     even, odd = x.float()[..., ::2], x.float()[..., 1::2]
     rotated = torch.stack((even * cosine - odd * sine,
                            even * sine + odd * cosine), dim=-1)
@@ -138,16 +162,18 @@ class CausalSelfAttention(nn.Module):
         self.k_norm = RMSNorm(config.head_dim, config.norm_eps) if config.use_qk_norm else None
 
     def forward(
-        self, x: Tensor, position_ids: Tensor, attention_mask: Tensor | None = None,
+        self, x: Tensor, rotations: tuple[Tensor, Tensor],
+        allowed: Tensor | None = None, layout: AttentionLayout | None = None,
     ) -> Tensor:
         """Return attention output with the same [batch, time, width] as ``x``.
 
         Args:
             x: Hidden token vectors, [batch, time, d_model].
-            position_ids: Positions used by RoPE, [batch, time].
-            attention_mask: Optional [batch, time, time] boolean matrix. True
-                means a query may read that key. Causality is added here even
-                if the caller's mask accidentally allows future positions.
+            rotations: Cosine/sine lookups shared across all layers.
+            allowed: Optional causal boolean [batch, 1, time, time] mask,
+                prepared once by Transformer for the reference SDPA path.
+            layout: Unpadding indices and independent sequence boundaries.
+                CUDA uses FlashAttention; CPU uses the reference mask above.
         """
         batch, time, _ = x.shape
         # Split the last axis into heads, then move heads before time. With
@@ -158,24 +184,31 @@ class CausalSelfAttention(nn.Module):
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
         if self.q_norm is not None:
             q, k = self.q_norm(q), self.k_norm(k)
-        q = apply_rope(q, position_ids, self.config.rope_theta)
-        k = apply_rope(k, position_ids, self.config.rope_theta)
+        q = apply_rope(q, *rotations)
+        k = apply_rope(k, *rotations)
 
-        if attention_mask is None:
-            # PyTorch can choose a memory-efficient attention kernel here.
-            allowed = None
+        if layout is not None and q.is_cuda:
+            # PyTorch 2.10's public varlen API calls FA2, including GQA with
+            # fewer KV heads. No [batch, time, time] mask enters this kernel.
+            def unpad(heads: Tensor) -> Tensor:
+                flat = heads.transpose(1, 2).reshape(batch * time, heads.size(1), heads.size(-1))
+                return flat.index_select(0, layout.token_indices)
+
+            packed = varlen_attn(
+                unpad(q), unpad(k), unpad(v),
+                layout.cu_seqlens, layout.cu_seqlens,
+                layout.max_seqlen, layout.max_seqlen, is_causal=True,
+            )
+            # Scatter back so residuals, shifted labels, and output shapes
+            # remain unchanged. Padding queries never contribute to the loss.
+            flat = packed.new_zeros(batch * time, self.config.n_heads, self.config.head_dim)
+            attended = flat.index_copy(0, layout.token_indices, packed).view(batch, time, -1)
         else:
-            causal = torch.ones(time, time, device=x.device, dtype=torch.bool).tril()
-            allowed = attention_mask[:, None, :, :] & causal[None, None, :, :]
-
-        attended = F.scaled_dot_product_attention(
-            q, k, v,
-            attn_mask=allowed,
-            is_causal=attention_mask is None,
-            enable_gqa=self.config.n_heads != self.config.n_kv_heads,
-        )
-        # Restore [batch, time, d_model] before the residual connection.
-        attended = attended.transpose(1, 2).contiguous().view(batch, time, self.config.d_model)
+            attended = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=allowed, is_causal=allowed is None,
+                enable_gqa=self.config.n_heads != self.config.n_kv_heads,
+            )
+            attended = attended.transpose(1, 2).contiguous().view(batch, time, self.config.d_model)
         return self.out_proj(attended)
 
 
@@ -214,12 +247,13 @@ class TransformerBlock(nn.Module):
         self.ffn = SwiGLUFeedForward(config)
 
     def forward(
-        self, x: Tensor, position_ids: Tensor, attention_mask: Tensor | None,
+        self, x: Tensor, rotations: tuple[Tensor, Tensor], allowed: Tensor | None,
+        layout: AttentionLayout | None,
     ) -> Tensor:
         """Refine hidden vectors while keeping their shape unchanged."""
         # A residual adds the old representation back after each sublayer. It
         # gives information and gradients a direct path across many blocks.
-        x = x + self.attention(self.attention_norm(x), position_ids, attention_mask)
+        x = x + self.attention(self.attention_norm(x), rotations, allowed, layout)
         return x + self.ffn(self.ffn_norm(x))
 
 
@@ -236,6 +270,13 @@ class Transformer(nn.Module):
         self.token_embedding = nn.Embedding(config.vocab_size, config.d_model)
         self.blocks = nn.ModuleList(TransformerBlock(config) for _ in range(config.n_layers))
         self.final_norm = RMSNorm(config.d_model, config.norm_eps)
+
+        pairs = torch.arange(0, config.head_dim, 2, dtype=torch.float32)
+        frequencies = config.rope_theta ** (-pairs / config.head_dim)
+        angles = torch.arange(config.max_seq_len, dtype=torch.float32)[:, None] * frequencies
+        # Derived tables move with the model but do not change checkpoint keys.
+        self.register_buffer("rope_cosine", angles.cos(), persistent=False)
+        self.register_buffer("rope_sine", angles.sin(), persistent=False)
 
         # Use the embedding matrix again for output scores (weight tying).
         # With Qwen's ~151k tokens and width 512, a second matrix would add
@@ -256,6 +297,8 @@ class Transformer(nn.Module):
         position_ids: Tensor | None = None,
         attention_mask: Tensor | None = None,
         loss_chunk_size: int | None = None,
+        attention_layout: AttentionLayout | None = None,
+        valid_target_count: int | None = None,
     ) -> tuple[Tensor | None, Tensor | None]:
         """Return ``(logits, loss)``; chunked loss returns ``(None, loss)``.
 
@@ -274,6 +317,12 @@ class Transformer(nn.Module):
                 checkpoint their cross-entropy. This avoids retaining the full
                 [batch, time, vocab] logits during training, at the cost of
                 recomputing each output chunk in backward. Requires labels.
+            attention_layout: Loader-validated sequence boundaries, mutually
+                exclusive with attention_mask. Uses varlen FlashAttention on
+                CUDA bf16/fp16 and a dense reference on CPU.
+            valid_target_count: CPU-computed count of labels[:, 1:] != -100.
+                The loader supplies this to avoid a scalar CUDA read during
+                chunked loss. Other callers can omit it for checked counting.
 
         For a sequence [A, B, C], losses compare predictions after A with B,
         and after B with C. The prediction after C has no target here.
@@ -287,6 +336,10 @@ class Transformer(nn.Module):
             raise ValueError("labels must match input_ids and need at least 2 tokens")
         if loss_chunk_size is not None and (loss_chunk_size <= 0 or labels is None):
             raise ValueError("loss_chunk_size must be positive and requires labels")
+        if valid_target_count is not None and (labels is None or valid_target_count <= 0):
+            raise ValueError("valid_target_count must be positive and requires labels")
+        if attention_layout is not None and attention_mask is not None:
+            raise ValueError("Pass attention_layout or attention_mask, not both")
         if position_ids is None:
             position_ids = torch.arange(time, device=input_ids.device).expand(batch, -1)
         elif position_ids.shape != input_ids.shape:
@@ -295,15 +348,29 @@ class Transformer(nn.Module):
             if attention_mask.shape != (batch, time, time) or attention_mask.dtype != torch.bool:
                 raise ValueError("attention_mask must be boolean [batch, time, time]")
 
+        rotations = (self.rope_cosine[position_ids][:, None], self.rope_sine[position_ids][:, None])
+        if attention_layout is not None and not input_ids.is_cuda:
+            attention_mask = attention_layout.dense_mask(batch, time)
+        allowed = None
+        if attention_mask is not None:
+            # Only the reference/custom-mask path materializes causality, once
+            # per forward. The CUDA varlen path uses the kernel's causal flag.
+            causal = torch.ones(time, time, device=input_ids.device, dtype=torch.bool).tril()
+            allowed = attention_mask[:, None] & causal[None, None]
+
         hidden = self.token_embedding(input_ids)
         for block in self.blocks:
-            hidden = block(hidden, position_ids, attention_mask)
+            hidden = block(hidden, rotations, allowed, attention_layout)
         hidden = self.final_norm(hidden)
         if loss_chunk_size is not None:
             targets = labels[:, 1:]
-            valid_count = targets.ne(-100).sum()
-            if valid_count.item() == 0:
-                raise ValueError("At least one next-token target must be unmasked")
+            valid_count = valid_target_count
+            if valid_count is None:
+                # Interactive callers retain validation; training already
+                # counted and checked these targets on CPU in make_batch.
+                valid_count = int(targets.ne(-100).sum())
+                if valid_count == 0:
+                    raise ValueError("At least one next-token target must be unmasked")
 
             def chunk_loss(chunk_hidden: Tensor, chunk_targets: Tensor) -> Tensor:
                 """Sum loss before dividing, so chunk boundaries cannot change it."""
@@ -318,9 +385,11 @@ class Transformer(nn.Module):
                 stop = min(start + loss_chunk_size, time - 1)
                 # Checkpoint recomputes this vocabulary projection in backward.
                 # Only one small [batch, chunk, vocab] matrix is live at a time.
+                # Projection/CE contain no randomness, so saving/restoring RNG
+                # per chunk is unnecessary. Re-enable it if dropout is added.
                 total_loss = total_loss + checkpoint(
                     chunk_loss, hidden[:, start:stop], targets[:, start:stop],
-                    use_reentrant=False,
+                    use_reentrant=False, preserve_rng_state=False,
                 )
             return None, total_loss / valid_count
         logits = F.linear(hidden, self.token_embedding.weight)

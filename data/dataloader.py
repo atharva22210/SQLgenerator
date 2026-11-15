@@ -16,6 +16,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from model.transformer_35m import AttentionLayout
+
 
 SQL_SOURCES = ("nstext2sql", "sql_context", "text_to_sql_v1")
 
@@ -24,8 +26,9 @@ SQL_SOURCES = ("nstext2sql", "sql_context", "text_to_sql_v1")
 class Batch:
     """One next-token batch; labels use -100 where loss should be ignored.
 
-    ``document_ids`` is only used by masked packing. Its equality matrix is
-    the document-isolated attention mask, shape [batch, time, time].
+    ``attention_layout`` stores linear-size unpadding indices and cumulative
+    sequence lengths. ``document_ids`` remains CPU metadata for inspection;
+    training no longer transfers it or builds its quadratic equality matrix.
     """
 
     input_ids: Tensor
@@ -35,19 +38,38 @@ class Batch:
     non_pad_tokens: int
     predicted_tokens: int
     sql_tokens: int
+    attention_layout: AttentionLayout
+    mode: str
 
     def model_inputs(self, mode: str, device: torch.device) -> dict:
-        """Move the batch and make a mask only for isolated packing."""
-        inputs = {
-            "input_ids": self.input_ids.to(device),
-            "labels": self.labels.to(device),
-            "position_ids": self.position_ids.to(device),
+        """Transfer tensors once; leave checked counts and lengths on CPU.
+
+        CUDA copies use pinned host storage and nonblocking transfers, so the
+        host can enqueue the entire microbatch without waiting for GPU work.
+        ``mode`` must match construction: naive packing has one segment per
+        row, while masked packing has one per document.
+        """
+        if mode != self.mode:
+            raise ValueError("model_inputs mode must match the batch mode")
+
+        def transfer(tensor: Tensor) -> Tensor:
+            if device.type == "cuda":
+                return tensor.pin_memory().to(device, non_blocking=True)
+            return tensor.to(device)
+
+        layout = self.attention_layout
+        return {
+            "input_ids": transfer(self.input_ids),
+            "labels": transfer(self.labels),
+            "position_ids": transfer(self.position_ids),
+            "attention_layout": AttentionLayout(
+                token_indices=transfer(layout.token_indices),
+                cu_seqlens=transfer(layout.cu_seqlens),
+                max_seqlen=layout.max_seqlen,
+                sequence_lengths=layout.sequence_lengths,
+            ),
+            "valid_target_count": self.predicted_tokens,
         }
-        if mode == "masked_pack":
-            ids = self.document_ids.to(device)
-            # True permits attention; the transformer also adds causality.
-            inputs["attention_mask"] = ids[:, :, None] == ids[:, None, :]
-        return inputs
 
 
 class DocumentFile:
@@ -74,11 +96,12 @@ class DocumentFile:
         if len(self.ends) == 0:
             raise ValueError(f"No EOS-delimited documents in {path}")
 
-    def sample(self, rng: random.Random, max_length: int, *, first_slice: bool = False) -> list[int]:
+    def sample(self, rng: random.Random, max_length: int, *, first_slice: bool = True) -> list[int]:
         """Pick one document, or a contiguous slice if it exceeds the context.
 
-        Long documents are sliced for a fixed context; validation uses the
-        first slice to keep its examples repeatable across batching modes.
+        Training and validation keep the beginning of long documents, where
+        SQL prompts/schemas occur. This deliberately excludes overlong tails.
+        Set first_slice=False explicitly to sample a random contiguous slice.
         """
         index = rng.randrange(len(self.ends))
         start = 0 if index == 0 else int(self.ends[index - 1]) + 1
@@ -103,7 +126,7 @@ class Corpus:
         self.sql = [DocumentFile(directory / f"{name}_{split}.bin", eos_id) for name in SQL_SOURCES]
         self.sql_weights = [source.token_count for source in self.sql]
 
-    def sample(self, kind: str, rng: random.Random, length: int, *, first_slice: bool = False) -> list[int]:
+    def sample(self, kind: str, rng: random.Random, length: int, *, first_slice: bool = True) -> list[int]:
         if kind == "english":
             source = self.english
         elif kind == "sql":
@@ -154,14 +177,15 @@ def make_batch(
         raise ValueError("validation_kind must be english, sql, or None")
 
     rows, labels, positions, document_ids = [], [], [], []
+    token_indices, sequence_lengths = [], []
     non_pad, predicted, sql_tokens = 0, 0, 0
-    for _ in range(batch_size):
+    for row in range(batch_size):
         ids, row_labels, pos, doc_ids = [], [], [], []
         document_number = 0
         while len(ids) < seq_len:
             kind = validation_kind or ("sql" if rng.random() < sql_fraction else "english")
             document = corpus.sample(
-                kind, rng, seq_len - len(ids), first_slice=validation_kind is not None,
+                kind, rng, seq_len - len(ids), first_slice=True,
             )
             if not document:
                 continue
@@ -169,6 +193,8 @@ def make_batch(
                 sql_tokens += len(document)
             start = len(ids)
             ids.extend(document)
+            if mode == "masked_pack":
+                sequence_lengths.append(len(document))
             row_labels.extend(document)
             pos.extend(range(len(document)) if mode == "masked_pack" else range(start, len(ids)))
             doc_ids.extend([document_number] * len(document))
@@ -180,6 +206,12 @@ def make_batch(
             if mode == "pad" or validation_kind is not None:
                 break
         real = len(ids)
+        token_indices.extend(range(row * seq_len, row * seq_len + real))
+        if mode != "masked_pack":
+            # Naive packing intentionally lets later documents read earlier
+            # ones in the same row. Splitting it per document would silently
+            # turn that baseline into masked packing.
+            sequence_lengths.append(real)
         non_pad += real
         pad_count = seq_len - real
         ids.extend([pad_id] * pad_count)
@@ -195,6 +227,17 @@ def make_batch(
 
     if predicted == 0:
         raise ValueError("Batch contains no next-token targets; check the corpus and seq_len")
+    cumulative = [0]
+    for length in sequence_lengths:
+        cumulative.append(cumulative[-1] + length)
+    # Boundaries and max length are computed from Python lists, never CUDA
+    # nonzero()/max().item(), which would synchronize each microbatch.
+    layout = AttentionLayout(
+        token_indices=torch.tensor(token_indices, dtype=torch.long),
+        cu_seqlens=torch.tensor(cumulative, dtype=torch.int32),
+        max_seqlen=max(sequence_lengths),
+        sequence_lengths=tuple(sequence_lengths),
+    )
     return Batch(
         input_ids=torch.tensor(rows, dtype=torch.long),
         labels=torch.tensor(labels, dtype=torch.long),
@@ -203,4 +246,6 @@ def make_batch(
         non_pad_tokens=non_pad,
         predicted_tokens=predicted,
         sql_tokens=sql_tokens,
+        attention_layout=layout,
+        mode=mode,
     )
