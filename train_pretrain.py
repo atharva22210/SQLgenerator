@@ -163,6 +163,8 @@ def _load_data_and_tokenizer():
     _validate_corpus_files(DATA_DIR, metadata)
     train = Corpus(DATA_DIR, "train", tokenizer.eos_token_id)
     validation = Corpus(DATA_DIR, "val", tokenizer.eos_token_id)
+    from data.sql_overlap import filter_validation
+    filter_validation(train, validation, tokenizer)
     return tokenizer, train, validation
 
 

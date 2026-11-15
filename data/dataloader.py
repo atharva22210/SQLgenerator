@@ -103,7 +103,15 @@ class DocumentFile:
         SQL prompts/schemas occur. This deliberately excludes overlong tails.
         Set first_slice=False explicitly to sample a random contiguous slice.
         """
-        index = rng.randrange(len(self.ends))
+        # The overlap check supplies original row indices. Keep ``ends`` intact:
+        # deleting an end would incorrectly merge two neighboring documents.
+        eligible = getattr(self, "eligible_indices", None)
+        if eligible is None:
+            index = rng.randrange(len(self.ends))
+        else:
+            if len(eligible) == 0:
+                raise ValueError("No eligible validation documents in this source")
+            index = int(rng.choice(eligible))
         start = 0 if index == 0 else int(self.ends[index - 1]) + 1
         end = int(self.ends[index]) + 1
         if end - start > max_length:
