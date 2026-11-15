@@ -52,6 +52,36 @@ def _preview(text: str, max_chars: int) -> tuple[str, bool]:
     return text[:head] + f"\n... [{omitted} characters omitted] ...\n" + text[-tail:], True
 
 
+def _question_and_sql(source: str, decoded: str) -> tuple[str | None, str | None]:
+    """Extract the source question and reference SQL from a decoded row.
+
+    This is an inspection aid, not a model prediction. SQL sources were saved
+    as prompt + ``<sql>`` + answer + ``</sql>``. For NSText2SQL the question is
+    the last ``--`` comment in its prompt; the other sources use ``Question:``.
+    If an exceptionally long row was only partly decoded, a missing field is
+    shown as null rather than guessing its contents.
+    """
+    if source == "english":
+        return None, None
+    prompt, marker, response = decoded.rpartition("<sql>")
+    if not marker:
+        return None, None
+    answer, closing_marker, _ = response.partition("</sql>")
+    if not closing_marker:
+        return None, None
+
+    if source == "nstext2sql":
+        # The last SQL-comment line contains the user's natural-language
+        # request; an earlier comment may instead describe the SQL dialect.
+        comments = [line.strip()[2:].strip() for line in prompt.splitlines()
+                    if line.lstrip().startswith("--")]
+        question = comments[-1] if comments else None
+    else:
+        _, question_marker, question_text = prompt.rpartition("Question:\n")
+        question = question_text.strip() if question_marker else None
+    return question, answer.strip()
+
+
 @app.function(image=image, volumes={"/vol": volume}, cpu=1, memory=2_048, timeout=180)
 def inspect(split: str, samples_per_source: int, max_chars: int) -> dict:
     """Return decoded examples from each saved ``<source>_<split>.bin`` file.
@@ -130,12 +160,17 @@ def inspect(split: str, samples_per_source: int, max_chars: int) -> dict:
                 )
                 middle_not_decoded = True
             preview, text_clipped = _preview(decoded, max_chars)
+            question, sql_query = _question_and_sql(source, decoded)
             rows.append({
                 "row_number_in_file": row_number,
                 "token_count_including_eos": count,
                 "eos_id": eos_id,
                 "middle_not_decoded": middle_not_decoded,
                 "display_clipped": text_clipped,
+                # These fields stay complete even if decoded_text is shortened
+                # for display. English rows have no question/SQL pair.
+                "question": question,
+                "sql_query": sql_query,
                 "decoded_text": preview,
             })
             start = end + 1
