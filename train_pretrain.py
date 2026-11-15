@@ -1,4 +1,4 @@
-"""Run one readable, single-L4 pretraining experiment on saved token files.
+"""Run one readable, single-A10 pretraining experiment on saved token files.
 
 Run the same command three times with ``--mode pad``, ``naive_pack``, and
 ``masked_pack``. The Modal Volume supplies data and receives checkpoints;
@@ -12,7 +12,7 @@ Example (small correctness run before a longer comparison)::
 
 The default batch is deliberately smaller than the photographed 8 x 2048
 recipe. With 151,670 vocabulary entries the tied embedding alone is about
-78 million parameters, so this is not a 35M-parameter model. Measure L4
+78 million parameters, so this is not a 35M-parameter model. Measure A10
 memory and throughput before increasing microbatch size or sequence length.
 """
 
@@ -64,6 +64,8 @@ class TrainConfig:
         seq_len: Token slots per row; it must fit model.max_seq_len.
         max_steps: Number of optimizer updates, not microbatches.
         warmup_steps: Updates with linearly rising learning rate.
+        lr_schedule: Decay after warmup: cosine or inverse_sqrt. Both use
+            bf16 mixed precision and the same model, data, and optimizer.
         eval_every: Updates between standalone-document validation passes.
         val_batches: Fixed number of batches per validation corpus.
         seed: Shared initial model and data sampling seed across modes.
@@ -77,6 +79,7 @@ class TrainConfig:
     seq_len: int = 512
     max_steps: int = 500
     warmup_steps: int = 50
+    lr_schedule: str = "cosine"
     eval_every: int = 50
     val_batches: int = 8
     seed: int = 42
@@ -89,6 +92,8 @@ class TrainConfig:
     def __post_init__(self) -> None:
         if self.mode not in {"pad", "naive_pack", "masked_pack"}:
             raise ValueError("mode must be pad, naive_pack, or masked_pack")
+        if self.lr_schedule not in {"cosine", "inverse_sqrt"}:
+            raise ValueError("lr_schedule must be cosine or inverse_sqrt")
         if not 0 <= self.sql_fraction <= 1:
             raise ValueError("sql_fraction must be between 0 and 1")
         if min(self.micro_batch_size, self.grad_accum_steps, self.seq_len,
@@ -102,20 +107,30 @@ class TrainConfig:
 
 
 def learning_rate(update: int, config: TrainConfig) -> float:
-    """Warm up linearly, then follow half a cosine to ``min_lr``.
+    """Return the LR for one-based optimizer update ``update``.
 
-    ``update`` is one-based: for a 50-step warmup, update 50 uses peak_lr;
-    update 500 uses min_lr. The cosine slope is zero at both ends, so the
-    decay begins and ends gently.
+    Warmup reaches peak_lr on update ``warmup_steps``. With no warmup, update
+    1 starts at peak_lr. Cosine reaches min_lr at max_steps and flattens at
+    both ends; inverse_sqrt decays as 1/sqrt(update) and may not reach min_lr
+    by max_steps. The floor prevents its LR from falling below min_lr later.
     """
     if not 1 <= update <= config.max_steps:
         raise ValueError("update must be within the training run")
     if update <= config.warmup_steps and config.warmup_steps:
         return config.peak_lr * update / config.warmup_steps
-    decay_steps = config.max_steps - config.warmup_steps
+    if config.lr_schedule == "inverse_sqrt":
+        # Anchor at the end of warmup: step 50 has peak_lr, while step 200
+        # has peak_lr * sqrt(50 / 200) = half the peak. With no warmup,
+        # anchor at step 1 so the first update uses peak_lr.
+        anchor = max(1, config.warmup_steps)
+        return max(config.min_lr, config.peak_lr * math.sqrt(anchor / update))
+    # With zero warmup, step 1 itself is the cosine peak. Otherwise the
+    # warmup's last step is the peak and the cosine begins on the next step.
+    decay_start = max(1, config.warmup_steps)
+    decay_steps = config.max_steps - decay_start
     if decay_steps == 0:
         return config.peak_lr
-    progress = (update - config.warmup_steps) / decay_steps
+    progress = (update - decay_start) / decay_steps
     return config.min_lr + 0.5 * (config.peak_lr - config.min_lr) * (1 + math.cos(math.pi * progress))
 
 
@@ -183,6 +198,8 @@ def _evaluate(model, corpus, config: TrainConfig, pad_id: int, device) -> dict[s
                     sql_fraction=config.sql_fraction, pad_id=pad_id, rng=rng,
                     validation_kind=kind,
                 )
+                # Use the same bf16 compute path for both LR schedules. Model
+                # weights and optimizer state remain float32 for stable updates.
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     _, loss = model(**batch.model_inputs("pad", device), loss_chunk_size=config.loss_chunk_size)
                 total_loss += float(loss) * batch.predicted_tokens
@@ -226,6 +243,8 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
 
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         raise RuntimeError("This run needs a CUDA GPU with bf16 support")
+    # bf16 has a wide exponent range, so this mixed-precision path needs no
+    # GradScaler. Autocast changes eligible compute ops, not parameter dtype.
     if not wandb_entity:
         raise ValueError("Pass --wandb-entity to record a reproducible run")
     tokenizer, train, validation = _load_data_and_tokenizer()
@@ -264,11 +283,13 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
 
     print(json.dumps({"run": run_name, "parameter_count": parameter_count,
                       "gpu": torch.cuda.get_device_name(), "resume_after_update": start_update,
+                      "compute_dtype": "bfloat16", "parameter_dtype": "float32",
                       "data_dir": str(DATA_DIR), "checkpoint": str(path)}), flush=True)
     with wandb.init(
         entity=wandb_entity, project=wandb_project, name=run_name,
         id=wandb_id, resume="allow", config={**asdict(config), "parameter_count": parameter_count,
-                                              "gpu": torch.cuda.get_device_name()},
+                                              "gpu": torch.cuda.get_device_name(),
+                                              "compute_dtype": "bfloat16", "parameter_dtype": "float32"},
         settings=wandb.Settings(init_timeout=120),
     ) as run:
         for update in range(start_update + 1, config.max_steps + 1):
@@ -285,6 +306,8 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
             target_count = sum(batch.predicted_tokens for batch in batches)
             weighted_loss = 0.0
             for batch in batches:
+                # Training and validation both use bf16 autocast, whether the
+                # LR came from cosine or inverse-square-root decay.
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     _, loss = model(**batch.model_inputs(config.mode, device),
                                     loss_chunk_size=config.loss_chunk_size)
@@ -324,11 +347,11 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
 
 @app.function(
     image=image, volumes={"/vol": volume}, secrets=[wandb_secret],
-    gpu="L4", cpu=4, memory=16_384, timeout=86_400,
+    gpu="A10", cpu=4, memory=16_384, timeout=86_400,
     startup_timeout=600, scaledown_window=2,
 )
 def train_on_gpu(config: dict, wandb_entity: str, wandb_project: str, run_name: str) -> dict:
-    """Remote boundary: runs on one L4, while the local entrypoint only submits."""
+    """Remote boundary: runs on one A10, while the local entrypoint only submits."""
     return _run(TrainConfig(**config), wandb_entity, wandb_project, run_name)
 
 
@@ -336,7 +359,8 @@ def train_on_gpu(config: dict, wandb_entity: str, wandb_project: str, run_name: 
 def main(
     mode: str = "pad", sql_fraction: float = 0.5,
     micro_batch_size: int = 1, grad_accum_steps: int = 4, seq_len: int = 512,
-    max_steps: int = 500, warmup_steps: int = 50, eval_every: int = 50,
+    max_steps: int = 500, warmup_steps: int = 50, lr_schedule: str = "cosine",
+    eval_every: int = 50,
     val_batches: int = 8, seed: int = 42, loss_chunk_size: int = 64,
     wandb_entity: str = "", wandb_project: str = "sqlgen-day5",
     run_name: str = "",
@@ -345,11 +369,12 @@ def main(
     config = TrainConfig(
         mode=mode, sql_fraction=sql_fraction, micro_batch_size=micro_batch_size,
         grad_accum_steps=grad_accum_steps, seq_len=seq_len, max_steps=max_steps,
-        warmup_steps=warmup_steps, eval_every=eval_every, val_batches=val_batches,
+        warmup_steps=warmup_steps, lr_schedule=lr_schedule,
+        eval_every=eval_every, val_batches=val_batches,
         seed=seed, loss_chunk_size=loss_chunk_size,
     )
     if not wandb_entity:
         raise ValueError("Supply --wandb-entity for W&B logging")
-    name = run_name or f"{mode}-sql{sql_fraction:g}-seed{seed}"
+    name = run_name or f"{mode}-{lr_schedule}-sql{sql_fraction:g}-seed{seed}"
     _checkpoint_path(name)  # Validate before requesting a GPU.
     print(json.dumps(train_on_gpu.remote(asdict(config), wandb_entity, wandb_project, name), indent=2))

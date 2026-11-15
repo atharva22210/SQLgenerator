@@ -65,11 +65,31 @@ class TrainingDataTests(unittest.TestCase):
                    sql_fraction=0.0, pad_id=0, rng=random.Random(0))
         self.assertEqual(english_corpus.calls, ["english", "english"])
 
-    def test_schedule_reaches_peak_then_minimum(self) -> None:
+    def test_cosine_schedule_reaches_peak_then_minimum(self) -> None:
         config = TrainConfig(max_steps=10, warmup_steps=2)
         self.assertAlmostEqual(learning_rate(1, config), config.peak_lr / 2)
         self.assertAlmostEqual(learning_rate(2, config), config.peak_lr)
         self.assertAlmostEqual(learning_rate(10, config), config.min_lr)
+
+    def test_cosine_without_warmup_starts_at_peak(self) -> None:
+        config = TrainConfig(max_steps=4, warmup_steps=0)
+        self.assertAlmostEqual(learning_rate(1, config), config.peak_lr)
+        self.assertAlmostEqual(learning_rate(4, config), config.min_lr)
+
+    def test_inverse_sqrt_schedule_anchors_at_warmup_and_decays(self) -> None:
+        config = TrainConfig(lr_schedule="inverse_sqrt", max_steps=10, warmup_steps=2)
+        self.assertAlmostEqual(learning_rate(1, config), config.peak_lr / 2)
+        self.assertAlmostEqual(learning_rate(2, config), config.peak_lr)
+        # Four times as many updates after the anchor halves the rate.
+        self.assertAlmostEqual(learning_rate(8, config), config.peak_lr / 2)
+        self.assertGreater(learning_rate(10, config), config.min_lr)
+
+    def test_inverse_sqrt_without_warmup_and_invalid_schedule(self) -> None:
+        config = TrainConfig(lr_schedule="inverse_sqrt", max_steps=4, warmup_steps=0)
+        self.assertAlmostEqual(learning_rate(1, config), config.peak_lr)
+        self.assertAlmostEqual(learning_rate(4, config), config.peak_lr / 2)
+        with self.assertRaisesRegex(ValueError, "lr_schedule"):
+            TrainConfig(lr_schedule="linear")
 
 
 if __name__ == "__main__":

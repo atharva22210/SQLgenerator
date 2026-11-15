@@ -32,7 +32,8 @@ uv run --locked modal run --env main --profile sanika-05 \
 ```
 
 When that finishes, run each mode with the **same** `sql_fraction`, seed,
-sequence length, batch size, learning-rate schedule, and evaluation settings:
+sequence length, batch size, learning-rate schedule, and evaluation settings.
+The default schedule is `cosine`:
 
 ```bash
 uv run --locked modal run --env main --profile sanika-05 train_pretrain.py --mode pad --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
@@ -40,7 +41,27 @@ uv run --locked modal run --env main --profile sanika-05 train_pretrain.py --mod
 uv run --locked modal run --env main --profile sanika-05 train_pretrain.py --mode masked_pack --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
 ```
 
-Each command requests **one L4 GPU**, 4 CPUs, and 16 GiB container RAM, with
+To compare learning-rate schedules, hold the batch mode and all other settings
+fixed. For example, these two runs use the same `pad` mode and seed:
+
+```bash
+uv run --locked modal run --env main --profile sanika-05 train_pretrain.py --mode pad --lr-schedule cosine --run-name pad-cosine-seed42 --wandb-entity dkbsingh7-iit-delhi
+uv run --locked modal run --env main --profile sanika-05 train_pretrain.py --mode pad --lr-schedule inverse_sqrt --run-name pad-inverse-sqrt-seed42 --wandb-entity dkbsingh7-iit-delhi
+```
+
+Both schedules warm up linearly to `peak_lr` at update 50. Cosine then gently
+falls to `min_lr` at update 500. Inverse square root follows
+`max(min_lr, peak_lr * sqrt(warmup_steps / update))`; it is about 0.316 times
+the peak at update 500 and does **not** have to reach `min_lr` then. With no
+warmup, update 1 is the anchor and starts at the peak. Plot `train/lr` beside
+validation loss to see what the schedule actually did.
+
+Both schedules use bf16 mixed precision in training **and** validation:
+autocast runs eligible CUDA operations in bf16 while model parameters and
+AdamW state stay float32. This path does not need gradient scaling for bf16.
+The trainer checks for CUDA bf16 support before loading data.
+
+Each command requests **one A10 GPU**, 4 CPUs, and 16 GiB container RAM, with
 an upper function timeout of 24 hours. Run them one after another if GPU
 availability is limited. No GPU is requested by editing or testing the code.
 The default model uses six layers, width 512, eight query heads, four KV heads,
@@ -49,7 +70,7 @@ and a 1408-wide SwiGLU. The Qwen tokenizer's ~151k tokens make this about
 filename. The safe initial training batch is one 512-token row per microbatch,
 four accumulated microbatches. The pictured 8 × 2048 setting is available via
 `--micro-batch-size 8 --seq-len 2048` after measuring GPU memory; it may not
-fit on an L4. Default 500 updates use 1,024,000 token slots, before padding.
+fit on an A10. Default 500 updates use 1,024,000 token slots, before padding.
 
 `--sql-fraction 0.5` means a 50% chance that each sampled document is SQL.
 Because documents have different lengths, the actual SQL token fraction can
