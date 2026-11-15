@@ -399,6 +399,101 @@ fail explicitly if the allocation is missing or unexpected; torchrun worker
 failures propagate to the caller. A W&B authentication or permission failure
 is reported as an error rather than silently switching to offline logging.
 
+## Pre-training data preparation
+
+`data/prepare_pretrain_data.py` uses the locked CPU environment (Python
+3.13.15, datasets 4.8.5, transformers 4.57.6, tokenizers 0.22.2), omitting the
+`model` group remotely. It streams FineWeb-Edu `sample-10BT` and three SQL
+sources into the existing eight uint32 `.bin` files under
+`/vol/pretrain_data/`. Original row order, every-tenth-row validation, skipped
+empty SQL examples, and one EOS per included document are preserved. It does
+not truncate long documents; training will need to pack tokens into windows.
+
+The optimized pipeline changes execution rather than the corpus:
+
+- Read each source once and write training and validation together. This
+  removes the second full source scan, not half the tokenization work.
+- Tokenize batches of at most 256 source rows or approximately one million
+  formatted characters with the fast tokenizer. The Modal image sets
+  `TOKENIZERS_PARALLELISM=true` and `RAYON_NUM_THREADS=8` before Rust initializes,
+  exposing parallel work to the eight requested CPU cores. One oversized
+  document remains intact, so the character cap is a soft memory bound.
+- Prefetch one additional batch in a producer thread while Rust tokenizes the
+  current batch. Only that producer accesses the source iterator; its frozen
+  batch cursor prevents checkpoints from accidentally including read-ahead.
+- Read only FineWeb's `text` column, and treat its Parquet row groups as
+  ordered shards. New checkpoints restore the Hugging Face iterator cursor,
+  skipping completed shards. Restoring can still reread the current row group;
+  it does not replay the entire processed prefix. Other sources retain their
+  file-based shards.
+- Checkpoint both closed/flushed token files and their cursor in one
+  `<source>.checkpoint.json`, at batch boundaries after 50,000 source rows or
+  60 seconds, whichever comes first. A slow batch/read/commit can extend that
+  interval. An initial empty checkpoint also protects the first batch.
+  Retries truncate uncheckpointed tails before appending.
+- Pin the source commit SHA, fingerprint the tokenizer, and check the
+  pipeline/datasets version and formatting identity before resuming. Progress
+  logs include tokens/second, average process CPU cores, tokenization/write
+  time, and checkpoint commit time. A waiting-source heartbeat explains quiet
+  periods during reads/restoration; tokenizer work reports at batch boundaries.
+
+The old `*.bin.checkpoint.json` files are imported automatically if a paired
+checkpoint does not exist. With only an existing validation prefix, the first
+optimized run starts at source row zero **to fill the missing training file**,
+while skipping tokenization of the saved validation rows. Its new checkpoints
+then support cursor restoration. Legacy artifacts did not save source SHA or
+tokenizer fingerprints: migration assumes the source order and tokenizer still
+match. Old checkpoint files remain as historical records; use the new script
+for every subsequent retry, since the old script cannot read paired checkpoints.
+
+Run only one preparation App against these shared paths. `max_containers=1`
+serializes this function within an App, but does not lock out a teammate's
+separate App. Stop the old run before starting the optimized version. When
+the team is ready to run it, use a detached invocation so closing the local
+terminal does not end the job:
+
+```bash
+uv run --locked modal run --detach data/prepare_pretrain_data.py \
+  --profile YOUR_PROFILE --env main --submit-only
+```
+
+The entrypoint uses `.spawn()` to submit an independent Function invocation.
+`--submit-only` prints the call ID and exits the local launcher without waiting
+for completion; `--detach` keeps the App alive after that exit. Both flags are
+required for this submission pattern. Without `--submit-only`, the launcher
+waits on the spawned call and prints the final metadata. Monitor separately
+with `modal app logs APP_ID --env main` or the Modal dashboard. This removes
+the synchronous caller dependency; it does not prevent platform preemption,
+manual cancellation, or other runtime failures.
+
+No throughput gain has been measured on Modal for this version. A reasonable
+engineering target is 2–4x overall throughput, not a promised speedup: there
+are up to eight tokenization threads, but source reads, Python processing,
+uneven document lengths, and Volume commits can limit scaling. Removing one
+of two source scans halves that component's work; it does not imply a further
+2x multiplier on top of CPU scaling. The earlier 13–15 hour estimate was an
+extrapolation from the old validation pass, not a measured full-run baseline.
+
+Before spending a full run, agree on a short Modal comparison using the same
+pinned source slice, tokenizer, eight CPUs, and 16 GiB for old/new code. Predict
+the speedup first. Compare identical token bytes, tokens/second, average CPU
+cores, network ingress, memory, commit time, and restart-to-first-new-token
+latency. Include at least one durable checkpoint and a forced restart; test
+in separate output directories so the comparison cannot touch shared data.
+Set a time/cost bound before launching. No benchmark is run automatically by
+the script or the local tests.
+
+Offline correctness checks (no downloads or Modal jobs):
+
+```bash
+uv run --locked python -m unittest discover -s tests -p test_prepare_pretrain_data.py
+```
+
+These cover exact output bytes, real fast-tokenizer batching, local Parquet
+row-group cursor restoration, speculative prefetch, partial output writes,
+failures before the first periodic checkpoint, legacy migration, and input
+identity/length checks. They establish correctness, not performance scaling.
+
 ## Model
 
 ```python

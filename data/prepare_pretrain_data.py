@@ -11,16 +11,20 @@ in this first pre-training corpus.
 
 Run the preprocessing job::
 
-    uv run --locked modal run data/prepare_pretrain_data.py \\
-        --profile YOUR_PROFILE --env main
+    uv run --locked modal run --detach data/prepare_pretrain_data.py \\
+        --profile YOUR_PROFILE --env main --submit-only
 """
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
 import json
+import os
 from pathlib import Path
-from typing import Iterable, Iterator
+import time
 
 import modal
 
@@ -43,9 +47,15 @@ TEXT_TO_SQL_V1_DATASET = "Clinton/Text-to-sql-v1"
 # Qwen's vocabulary is larger than uint16 can represent. uint32 is still
 # compact compared with Python lists or strings and is lossless for token IDs.
 TOKEN_DTYPE = "uint32"
-# Save progress by row, so a preempted container can resume without repeating
-# hours of tokenization. A checkpoint is written only after its .bin bytes.
-CHECKPOINT_EVERY_ROWS = 5_000
+# These are source rows (before the 90/10 split). A single checkpoint covers
+# both output files and the source cursor, so they always resume together.
+CHECKPOINT_EVERY_ROWS = 50_000
+CHECKPOINT_SECONDS = 60
+BATCH_ROWS = 256
+BATCH_CHARACTERS = 1_000_000
+PROGRESS_SECONDS = 10
+CPU_CORES = 8
+PIPELINE_VERSION = 2
 
 app = modal.App("sqlgen-pretrain-data")
 # ``from_name`` refers to an existing shared Volume; it does not download the
@@ -65,6 +75,9 @@ image = (
             "UV_INDEX_URL": "https://pypi.org/simple",
         },
     )
+    # Set these before the Rust tokenizer initializes its global Rayon pool.
+    # Batches, unlike individual encode calls, expose document parallelism.
+    .env({"TOKENIZERS_PARALLELISM": "true", "RAYON_NUM_THREADS": str(CPU_CORES)})
     .add_local_file(
         ROOT / "data" / "prepare_pretrain_data.py",
         "/root/prepare_pretrain_data.py",
@@ -141,63 +154,27 @@ def format_text_to_sql_v1(row: dict) -> str | None:
     )
 
 
-def token_stream(
-    rows: Iterable[dict],
-    formatter,
-    tokenizer,
-) -> Iterator[int]:
-    """Yield complete tokenized examples from a selected row stream."""
-    for row_index, row in enumerate(rows):
-        # ``encode`` applies the saved tokenizer's vocabulary and algorithm.
-        # We do not manually read merges/vocabulary files here; the tokenizer
-        # artifact loaded by the caller owns those rules.
-        formatted = formatter(row)
-        if formatted is None:
-            print(f"Skipping empty {formatter.__name__} row {row_index}", flush=True)
-            continue
-        ids = tokenizer.encode(formatted, add_special_tokens=False)
-        # EOS separates examples. Without it, the model could see the final SQL
-        # token of one example immediately followed by the next prompt and
-        # learn a false continuation relationship.
-        ids.append(tokenizer.eos_token_id)
-
-        yield from ids
-
-
-def write_token_stream(path: Path, tokens: Iterable[int], chunk_size: int = 65_536) -> int:
-    """Write IDs in bounded chunks and return the number of written tokens."""
-    import numpy as np
-
-    # We write raw fixed-width integers rather than JSON/text. This is compact
-    # and lets the future training DataLoader memory-map the files. Chunking
-    # keeps the entire corpus out of RAM while the dataset is streamed.
-    path.parent.mkdir(parents=True, exist_ok=True)
-    count = 0
-    chunk: list[int] = []
-    with path.open("wb") as output:
-        for token_id in tokens:
-            chunk.append(token_id)
-            if len(chunk) == chunk_size:
-                np.asarray(chunk, dtype=TOKEN_DTYPE).tofile(output)
-                count += len(chunk)
-                chunk.clear()
-        if chunk:
-            np.asarray(chunk, dtype=TOKEN_DTYPE).tofile(output)
-            count += len(chunk)
-    return count
-
-
-def load_stream(dataset: str, *, config: str | None = None):
+def load_stream(dataset: str, *, config: str | None = None, revision: str):
     """Load a public Hugging Face dataset without downloading it all first."""
     from datasets import load_dataset
 
     # ``streaming=True`` returns an iterable dataset. We fetch examples as the
     # tokenizer asks for them instead of materializing a multi-gigabyte dataset
     # in the Modal container's ephemeral disk.
-    kwargs = {"path": dataset, "split": "train", "streaming": True}
+    kwargs = {"path": dataset, "split": "train", "streaming": True, "revision": revision}
+    if dataset == ENGLISH_DATASET:
+        # FineWeb's other nine columns are unused. Parquet column projection
+        # avoids fetching/decoding URLs, scores, dates, and other metadata.
+        kwargs["columns"] = ["text"]
     if config is not None:
         kwargs["name"] = config
-    return load_dataset(**kwargs)
+    stream = load_dataset(**kwargs)
+    if dataset == ENGLISH_DATASET:
+        # The locked datasets version can treat each Parquet row group as a
+        # shard, retaining file/row-group order. Cursor restoration then skips
+        # completed row groups rather than rereading a whole Parquet file.
+        stream = stream.reshard()
+    return stream
 
 
 def find_tokenizer_path() -> Path:
@@ -221,107 +198,225 @@ def find_tokenizer_path() -> Path:
     )
 
 
-def select_split(rows: Iterable[dict], split: str) -> Iterator[dict]:
-    """Yield a deterministic, non-overlapping train or validation partition.
+def tokenizer_fingerprint(tokenizer) -> str:
+    """Detect vocabulary/merge changes even when vocabulary size is unchanged."""
+    # Include wrapper behavior and special IDs as well as Rust's vocabulary.
+    identity = {"backend": json.loads(tokenizer.backend_tokenizer.to_str()),
+                "special_tokens": tokenizer.special_tokens_map,
+                "eos_token_id": tokenizer.eos_token_id,
+                "class": type(tokenizer).__name__}
+    # Padding/truncation are transient backend settings; our batch calls always
+    # disable both. Exclude them so merely encoding a batch cannot change ID.
+    identity["backend"]["padding"] = None
+    identity["backend"]["truncation"] = None
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
-    Hugging Face streaming datasets do not give us a cheap random-access split.
-    We therefore assign every tenth row to validation and the other nine rows
-    to training. Both jobs see the same deterministic row numbering, so a row
-    cannot appear in both files.
+
+def read_batch(iterator, stream, source_rows: int, formatter, floors: dict) -> dict:
+    """Read at most one bounded batch and snapshot its *own* source position.
+
+    Only the producer thread touches the iterator. The consumer may tokenize
+    this batch while the producer reads the next one. Never checkpoint the
+    live stream state from the consumer: prefetch may have advanced it already.
     """
-    if split not in {"train", "val"}:
-        raise ValueError(f"Unknown split {split!r}; expected 'train' or 'val'")
-    for row_index, row in enumerate(rows):
-        is_validation = row_index % 10 == 0
-        if (split == "val") == is_validation:
-            yield row
+    texts, splits = [], []
+    characters = 0
+    complete = False
+    for _ in range(BATCH_ROWS):
+        try:
+            row = next(iterator)
+        except StopIteration:
+            complete = True
+            break
+        is_val = source_rows % 10 == 0
+        split = "val" if is_val else "train"
+        # Global row 10 is validation row 1; global row 11 is training row 9.
+        selected_index = source_rows // 10 if is_val else source_rows - (source_rows + 9) // 10
+        source_rows += 1
+        if floors[split]["complete"] or selected_index < floors[split]["rows_done"]:
+            continue
+        formatted = formatter(row)
+        if formatted is not None:
+            texts.append(formatted)
+            splits.append(split)
+            characters += len(formatted)
+        # This is a soft bound: one unusually large document stays intact.
+        # Truncating/splitting text here would change the token stream.
+        if characters >= BATCH_CHARACTERS:
+            break
+    return {"texts": texts, "splits": splits, "source_rows": source_rows,
+            "stream_state": deepcopy(stream.state_dict()), "complete": complete}
 
 
-def write_split(
-    output_name: str,
-    dataset: str,
-    formatter,
-    tokenizer,
-    split: str,
-    config: str | None = None,
-) -> int:
-    """Tokenize one partition, resuming at the last committed row checkpoint."""
+def legacy_progress(name: str, dataset: str, config, tokenizer) -> dict:
+    """Import old row-only checkpoints without discarding their token prefix."""
+    result = {}
+    for split in ("train", "val"):
+        path = OUTPUT_PATH / f"{name}_{split}.bin.checkpoint.json"
+        state = json.loads(path.read_text()) if path.exists() else None
+        identity = {"dataset": dataset, "config": config, "split": split,
+                    "dtype": TOKEN_DTYPE, "vocab_size": len(tokenizer)}
+        if state and any(state.get(k) != v for k, v in identity.items()):
+            raise ValueError(f"Legacy checkpoint {path.name} belongs to different input data")
+        result[split] = ({k: state[k] for k in ("rows_done", "tokens_written", "complete")}
+                         if state else {"rows_done": 0, "tokens_written": 0, "complete": False})
+    return result
+
+
+def write_corpus(name: str, dataset: str, formatter, tokenizer, config=None) -> dict:
+    """Read once, tokenize batches in parallel, and atomically checkpoint both splits.
+
+    A checkpoint represents one consumed source prefix and two durable output
+    prefixes. Prefetched rows are excluded until their tokens have been written.
+    A retry truncates speculative bytes in *both* files before restoring that
+    source position. Original row numbering is retained across retries.
+    """
+    import datasets
+    from huggingface_hub import HfApi
     import numpy as np
 
-    path = OUTPUT_PATH / output_name
-    checkpoint_path = OUTPUT_PATH / f"{output_name}.checkpoint.json"
-    identity = {
-        "dataset": dataset,
-        "config": config,
-        "split": split,
-        "dtype": TOKEN_DTYPE,
-        "vocab_size": len(tokenizer),
-    }
+    checkpoint_path = OUTPUT_PATH / f"{name}.checkpoint.json"
     checkpoint = json.loads(checkpoint_path.read_text()) if checkpoint_path.exists() else None
-    if checkpoint is not None and any(checkpoint.get(k) != v for k, v in identity.items()):
-        raise ValueError(f"Checkpoint for {output_name} belongs to different input data")
-    rows_done = checkpoint["rows_done"] if checkpoint else 0
-    tokens_written = checkpoint["tokens_written"] if checkpoint else 0
-    saved_bytes = tokens_written * np.dtype(TOKEN_DTYPE).itemsize
-    if checkpoint and (not path.exists() or path.stat().st_size < saved_bytes):
-        raise ValueError(f"Token file for {output_name} is shorter than its checkpoint")
-    # An interruption may leave uncheckpointed bytes after the saved boundary.
-    # Truncate those bytes before appending so resumed rows never appear twice.
-    with path.open("r+b" if checkpoint else "wb") as output:
-        output.truncate(saved_bytes)
-    if checkpoint and checkpoint["complete"]:
-        print(f"Already complete: {output_name} ({tokens_written} tokens)", flush=True)
-        return tokens_written
+    identity = {"pipeline_version": PIPELINE_VERSION, "dataset": dataset, "config": config,
+                "dtype": TOKEN_DTYPE, "vocab_size": len(tokenizer),
+                "stream_layout": "row_groups" if dataset == ENGLISH_DATASET else "files",
+                "tokenizer_sha256": tokenizer_fingerprint(tokenizer),
+                "formatter": formatter.__name__, "datasets_version": datasets.__version__}
+    if checkpoint and any(checkpoint.get(k) != v for k, v in identity.items()):
+        raise ValueError(f"Checkpoint for {name} belongs to different input data or code")
+    progress = deepcopy(checkpoint["splits"]) if checkpoint else legacy_progress(
+        name, dataset, config, tokenizer)
+    paths = {split: OUTPUT_PATH / f"{name}_{split}.bin" for split in progress}
+    # Validate every prefix *before* mutating either output. Refuse orphaned
+    # output rather than silently replacing data whose checkpoint is missing.
+    for split, path in paths.items():
+        saved_bytes = progress[split]["tokens_written"] * np.dtype(TOKEN_DTYPE).itemsize
+        if saved_bytes and (not path.exists() or path.stat().st_size < saved_bytes):
+            raise ValueError(f"Token file for {path.name} is shorter than its checkpoint")
+        if checkpoint is None and not (OUTPUT_PATH / f"{path.name}.checkpoint.json").exists():
+            if path.exists() and path.stat().st_size:
+                raise ValueError(f"Token file {path.name} has no checkpoint; refusing to overwrite")
+    for split, path in paths.items():
+        with path.open("r+b" if path.exists() else "wb") as output:
+            output.truncate(progress[split]["tokens_written"] * np.dtype(TOKEN_DTYPE).itemsize)
+    if all(state["complete"] for state in progress.values()):
+        print(f"Already complete: {name}", flush=True)
+        return {split: state["tokens_written"] for split, state in progress.items()}
 
-    def save_checkpoint(complete: bool) -> None:
-        state = {**identity, "rows_done": rows_done, "tokens_written": tokens_written,
-                 "complete": complete}
+    # Pin the source revision for cursor stability. Legacy files did not record
+    # one; migration assumes their original source ordering has not changed.
+    revision = checkpoint["revision"] if checkpoint else HfApi().dataset_info(dataset).sha
+    stream = load_stream(dataset, config=config, revision=revision)
+    source_rows = checkpoint["source_rows"] if checkpoint else 0
+    if checkpoint:
+        if checkpoint["stream_state"] is not None:
+            stream.load_state_dict(checkpoint["stream_state"])
+        print(f"Resuming {name}: source row {source_rows}, revision {revision}; "
+              "restoring shard cursor (current shard may be reread)", flush=True)
+    else:
+        print(f"Starting {name}: revision {revision}, legacy prefixes={progress}", flush=True)
+        # Establish an empty durable prefix before writing any new bytes. Even
+        # a preemption before the first periodic checkpoint must be resumable.
+        state = {**identity, "revision": revision, "source_rows": 0,
+                 "stream_state": None, "splits": progress}
         temporary = checkpoint_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(state) + "\n")
         temporary.replace(checkpoint_path)
         volume.commit()
-        print(f"Checkpoint {output_name}: {rows_done} rows, {tokens_written} tokens", flush=True)
-
-    # ``select_split`` numbers the original source before filtering. Here we
-    # count selected rows, including skipped empty examples, for exact resume.
-    rows = select_split(load_stream(dataset, config=config), split)
-    pending: list[int] = []
-    output = path.open("ab")
+    iterator = iter(stream)
+    # Floors remain fixed for this invocation. They matter only during legacy
+    # migration, when validation may be ahead of the newly created train file.
+    floors = deepcopy(progress)
+    started = last_checkpoint = last_report = time.monotonic()
+    cpu_started = time.process_time()
+    committed_rows = source_rows
+    initial_tokens = sum(state["tokens_written"] for state in progress.values())
+    tokenize_seconds = 0.0
+    outputs = {split: path.open("ab") for split, path in paths.items()}
     try:
-        for selected_index, row in enumerate(rows):
-            if selected_index < rows_done:
-                continue
-            formatted = formatter(row)
-            if formatted is None:
-                print(f"Skipping empty {formatter.__name__} row {selected_index}", flush=True)
-            else:
-                ids = tokenizer.encode(formatted, add_special_tokens=False)
-                ids.append(tokenizer.eos_token_id)
-                pending.extend(ids)
-                tokens_written += len(ids)
-            rows_done = selected_index + 1
-            if len(pending) >= 65_536:
-                np.asarray(pending, dtype=TOKEN_DTYPE).tofile(output)
-                pending.clear()
-            if rows_done % CHECKPOINT_EVERY_ROWS == 0:
-                if pending:
-                    np.asarray(pending, dtype=TOKEN_DTYPE).tofile(output)
-                    pending.clear()
-                output.close()
-                save_checkpoint(complete=False)
-                output = path.open("ab")
-        if pending:
-            np.asarray(pending, dtype=TOKEN_DTYPE).tofile(output)
-        output.close()
-        save_checkpoint(complete=True)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="source-prefetch") as producer:
+            future = producer.submit(read_batch, iterator, stream, source_rows, formatter, floors)
+            while True:
+                try:
+                    batch = future.result(timeout=PROGRESS_SECONDS)
+                except FutureTimeout:
+                    if future.done():
+                        # A source TimeoutError is a real failure, whereas an
+                        # unfinished Future only means it is time to heartbeat.
+                        batch = future.result()
+                    else:
+                        print(f"Waiting for {name} source; last processed row={source_rows}", flush=True)
+                        continue
+                # One future bounds read-ahead to one additional batch. Its
+                # cursor can advance while this batch's frozen state is saved.
+                if not batch["complete"]:
+                    future = producer.submit(read_batch, iterator, stream, batch["source_rows"],
+                                             formatter, floors)
+                token_start = time.monotonic()
+                if batch["texts"]:
+                    encoded = tokenizer(batch["texts"], add_special_tokens=False, padding=False,
+                                        truncation=False, return_attention_mask=False,
+                                        return_token_type_ids=False)["input_ids"]
+                    # [batch, variable_length] -> two flat uint32 token streams.
+                    # Rust preserves batch order; append exactly one EOS per row.
+                    flat = {"train": [], "val": []}
+                    for split, ids in zip(batch["splits"], encoded, strict=True):
+                        flat[split].extend(ids)
+                        flat[split].append(tokenizer.eos_token_id)
+                    for split, ids in flat.items():
+                        if ids:
+                            np.asarray(ids, dtype=TOKEN_DTYPE).tofile(outputs[split])
+                            progress[split]["tokens_written"] += len(ids)
+                tokenize_seconds += time.monotonic() - token_start
+                source_rows = batch["source_rows"]
+                val_rows = (source_rows + 9) // 10
+                for split, count in (("val", val_rows), ("train", source_rows - val_rows)):
+                    progress[split]["rows_done"] = max(progress[split]["rows_done"], count)
+                now = time.monotonic()
+                tokens_added = sum(state["tokens_written"] for state in progress.values()) - initial_tokens
+                if now - last_report >= PROGRESS_SECONDS or batch["complete"]:
+                    print(f"Progress {name}: source_rows={source_rows}, new_tokens={tokens_added}, "
+                          f"tokens/s={tokens_added / max(now - started, 0.001):.0f}, "
+                          f"avg_cpu_cores={(time.process_time() - cpu_started) / max(now - started, 0.001):.2f}, "
+                          f"tokenize+write_s={tokenize_seconds:.1f}, elapsed_s={now - started:.1f}",
+                          flush=True)
+                    last_report = now
+                if (batch["complete"] or source_rows - committed_rows >= CHECKPOINT_EVERY_ROWS
+                        or now - last_checkpoint >= CHECKPOINT_SECONDS):
+                    for output in outputs.values():
+                        output.flush()
+                        os.fsync(output.fileno())
+                        output.close()
+                    if batch["complete"]:
+                        for split, count in (("val", val_rows), ("train", source_rows - val_rows)):
+                            if progress[split]["rows_done"] != count:
+                                raise ValueError("Legacy checkpoint exceeds source length")
+                        for state in progress.values():
+                            state["complete"] = True
+                    state = {**identity, "revision": revision, "source_rows": source_rows,
+                             "stream_state": batch["stream_state"], "splits": progress}
+                    temporary = checkpoint_path.with_suffix(".tmp")
+                    temporary.write_text(json.dumps(state) + "\n")
+                    temporary.replace(checkpoint_path)
+                    commit_start = time.monotonic()
+                    volume.commit()
+                    print(f"Checkpoint {name}: source_rows={source_rows}, splits={progress}, "
+                          f"commit_s={time.monotonic() - commit_start:.1f}", flush=True)
+                    committed_rows = source_rows
+                    last_checkpoint = time.monotonic()
+                    if not batch["complete"]:
+                        outputs = {split: path.open("ab") for split, path in paths.items()}
+                if batch["complete"]:
+                    break
     finally:
-        if not output.closed:
-            output.close()
-    return tokens_written
+        for output in outputs.values():
+            if not output.closed:
+                output.close()
+    return {split: state["tokens_written"] for split, state in progress.items()}
 
 
 def prepare() -> dict:
-    """Run all streams inside one CPU container and commit their outputs."""
+    """Run each source once inside one CPU container and commit its outputs."""
     from transformers import AutoTokenizer
 
     # A Volume mount can have a stale view if another process uploaded files
@@ -331,7 +426,12 @@ def prepare() -> dict:
 
     # Loading the directory restores the exact vocabulary, merge rules,
     # tokenizer implementation, and special-token IDs used during setup.
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, use_fast=True)
+    if not tokenizer.is_fast:
+        raise ValueError("Parallel batched preprocessing requires a fast Rust tokenizer")
+    print(f"Tokenizer threads={os.environ.get('RAYON_NUM_THREADS', 'library default')}, "
+          f"parallelism={os.environ.get('TOKENIZERS_PARALLELISM', 'library default')}, "
+          f"batch_rows={BATCH_ROWS}, batch_characters={BATCH_CHARACTERS}", flush=True)
     if tokenizer.eos_token_id is None:
         raise ValueError("Tokenizer must define an EOS token")
     if len(tokenizer) > 65_536:
@@ -346,53 +446,26 @@ def prepare() -> dict:
     OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
     results = {}
 
-    # Each source is loaded once per output because streaming datasets are
-    # iterators. Checkpoints allow a restart to skip finished rows/files.
-    results["english_val"] = write_split(
-        "english_val.bin",
-        ENGLISH_DATASET,
-        format_english,
-        tokenizer,
-        "val",
-        ENGLISH_CONFIG,
-    )
-    results["english_train"] = write_split(
-        "english_train.bin",
-        ENGLISH_DATASET,
-        format_english,
-        tokenizer,
-        "train",
-        ENGLISH_CONFIG,
-    )
-    results["nstext2sql_val"] = write_split(
-        "nstext2sql_val.bin", NSTEXT2SQL_DATASET, format_nstext2sql, tokenizer, "val"
-    )
-    results["nstext2sql_train"] = write_split(
-        "nstext2sql_train.bin", NSTEXT2SQL_DATASET, format_nstext2sql, tokenizer, "train"
-    )
-    results["sql_context_val"] = write_split(
-        "sql_context_val.bin", SQL_CONTEXT_DATASET, format_sql_context, tokenizer, "val"
-    )
-    results["sql_context_train"] = write_split(
-        "sql_context_train.bin", SQL_CONTEXT_DATASET, format_sql_context, tokenizer, "train"
-    )
-    results["text_to_sql_v1_val"] = write_split(
-        "text_to_sql_v1_val.bin",
-        TEXT_TO_SQL_V1_DATASET,
-        format_text_to_sql_v1,
-        tokenizer,
-        "val",
-    )
-    results["text_to_sql_v1_train"] = write_split(
-        "text_to_sql_v1_train.bin",
-        TEXT_TO_SQL_V1_DATASET,
-        format_text_to_sql_v1,
-        tokenizer,
-        "train",
-    )
+    sources = [
+        ("english", ENGLISH_DATASET, format_english, ENGLISH_CONFIG),
+        ("nstext2sql", NSTEXT2SQL_DATASET, format_nstext2sql, None),
+        ("sql_context", SQL_CONTEXT_DATASET, format_sql_context, None),
+        ("text_to_sql_v1", TEXT_TO_SQL_V1_DATASET, format_text_to_sql_v1, None),
+    ]
+    revisions = {}
+    for name, dataset, formatter, config in sources:
+        counts = write_corpus(name, dataset, formatter, tokenizer, config)
+        results.update({f"{name}_{split}": count for split, count in counts.items()})
+        checkpoint_path = OUTPUT_PATH / f"{name}.checkpoint.json"
+        # Fully completed legacy files need no conversion/read. Their old
+        # checkpoints have no revision, so record that uncertainty explicitly.
+        revisions[name] = (json.loads(checkpoint_path.read_text())["revision"]
+                           if checkpoint_path.exists() else None)
 
     metadata = {
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "pipeline_version": PIPELINE_VERSION,
+        "tokenizer_sha256": tokenizer_fingerprint(tokenizer),
         "tokenizer_path": str(tokenizer_path),
         "tokenizer_vocab_size": len(tokenizer),
         "token_dtype": TOKEN_DTYPE,
@@ -405,6 +478,7 @@ def prepare() -> dict:
             "sql_context": SQL_CONTEXT_DATASET,
             "text_to_sql_v1": TEXT_TO_SQL_V1_DATASET,
         },
+        "dataset_revisions": revisions,
         "token_counts": results,
     }
     # Metadata makes the artifact auditable: later we can recover which datasets,
@@ -419,7 +493,7 @@ def prepare() -> dict:
 @app.function(
     image=image,
     volumes={"/vol": volume},
-    cpu=8,
+    cpu=CPU_CORES,
     memory=16_384,
     # The job processes complete streaming datasets, so allow the Modal
     # Function to run for the platform maximum of 24 hours.
@@ -427,12 +501,24 @@ def prepare() -> dict:
     retries=3,
     startup_timeout=300,
     scaledown_window=2,
+    # Shared output filenames permit one writer. Detached invocations must
+    # also be serialized by the team: this limit is per App, not per Volume.
+    max_containers=1,
 )
 def prepare_pretrain_data() -> dict:
     return prepare()
 
 
 @app.local_entrypoint()
-def main() -> None:
-    result = prepare_pretrain_data.remote()
+def main(submit_only: bool = False) -> None:
+    # App detachment and invocation lifetime are separate. A synchronous
+    # .remote() call can be cancelled with its caller; .spawn() submits an
+    # independent job. With --detach --submit-only the launcher can exit
+    # normally, without keeping a local wait/connection alive for hours.
+    call = prepare_pretrain_data.spawn()
+    print(f"Submitted preprocessing call: {call.object_id}", flush=True)
+    if submit_only:
+        print("Use --detach with --submit-only so the App survives launcher exit.", flush=True)
+        return
+    result = call.get()
     print(json.dumps(result, indent=2), flush=True)
