@@ -524,3 +524,8 @@ Inside each worker, call `initialize_distributed()` and pass its returned
 device to `wrap_model(model, device, "ddp")`. Dataset sharding, optimizer
 configuration, checkpoint policy, and training loop are intentionally left to
 the training application.
+
+The runnable Day 6 application now implements those policies for the Part A
+DDP correctness and Part B `no_sync()` experiments. See
+[the commented code and execution guide](docs/day6-ddp-parts-ab.md), starting
+with its small GPU checks before the curriculum-size suites.
