@@ -8,14 +8,19 @@ def experiment_plan(part: str, max_steps: int = 0, micro_batch_size: int = 0,
     """Build a controlled suite; zero steps/batch selects the curriculum default.
 
     part='a': 300 updates, width 512, A1=8x8x1 and A2/A3=8x4x2.
+    part='ab': A1, A2, B1, B2 in that order, omitting the deliberate A3 bug.
     part='b': 100 updates, width 768, B1/B2=4x8x2; only no_sync differs.
     seq_len: Slots per row; use 64 for a cheap initial GPU check.
     sql_fraction: Probability of drawing a SQL document when filling a row.
     The larger preset is named by dimensions, not a misleading parameter count:
     the saved Qwen tokenizer makes the embedding alone larger than 100M.
     """
+    if part == 'ab':
+        a = experiment_plan('a', max_steps, micro_batch_size, seq_len, sql_fraction)
+        b = experiment_plan('b', max_steps, micro_batch_size, seq_len, sql_fraction)
+        return a[:2] + b
     if part not in {'a', 'b'} or max_steps < 0 or micro_batch_size < 0:
-        raise ValueError('part must be a/b; steps and microbatch must be nonnegative')
+        raise ValueError('part must be a/b/ab; steps and microbatch must be nonnegative')
     steps = max_steps or (300 if part == 'a' else 100)
     batch = micro_batch_size or (8 if part == 'a' else 4)
     cases = [('A1-single-reference', 1, 8, False, True),

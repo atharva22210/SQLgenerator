@@ -19,7 +19,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from data.dataloader import Corpus, make_batch
 from distributed_training.ddp_core import accumulated_backward, batch_rng, microbatch_ids
 from model.transformer_35m import Transformer, TransformerConfig
-from train_pretrain import TrainConfig, _load_data_and_tokenizer, _evaluate, learning_rate
+from train_pretrain import TrainConfig, learning_rate
+from distributed_training.sql_validation import load_training_and_sql_validation, evaluate_sql
 
 
 def run(settings: dict) -> None:
@@ -49,7 +50,7 @@ def run(settings: dict) -> None:
         output = Path(settings['output_dir'])
         if rank == 0:
             output.mkdir(parents=True, exist_ok=False)
-            tokenizer, corpus, validation = _load_data_and_tokenizer()
+            tokenizer, corpus, validation = load_training_and_sql_validation()
             identity = {'vocab_size': len(tokenizer), 'pad_id': tokenizer.pad_token_id,
                         'eos_id': tokenizer.eos_token_id}
         else:
@@ -155,7 +156,9 @@ def run(settings: dict) -> None:
                 if rank == 0:
                     # Use the UNWRAPPED model: other ranks wait at a barrier;
                     # a DDP forward here could hang on distributed collectives.
-                    metrics.update(_evaluate(raw_model, validation, config, identity['pad_id'], device))
+                    metrics.update(evaluate_sql(raw_model, validation, config, identity['pad_id'], device))
+                    if update == config.max_steps:
+                        metrics.update(evaluate_sql(raw_model, validation, config, identity['pad_id'], device, full=True))
                 if distributed:
                     dist.barrier()
             if rank == 0:

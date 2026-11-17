@@ -51,6 +51,9 @@ def run_suite(cases: list[dict], suite_name: str, wandb_entity: str, wandb_proje
     """
     import wandb
     volume.reload()
+    # Cheap kernel/collective gate; abort before any curriculum run on failure.
+    subprocess.run([sys.executable, '-m', 'torch.distributed.run', '--standalone',
+                    '--nproc_per_node=2', '-m', 'distributed_training.cuda_preflight'], check=True)
     results = []
     for case in cases:
         settings = {**case, 'run_name': f'{suite_name}-{case["label"]}', 'group': suite_name,
@@ -73,10 +76,10 @@ def run_suite(cases: list[dict], suite_name: str, wandb_entity: str, wandb_proje
                                            root / cases[1]['label'] / 'final.pt')
     with wandb.init(entity=wandb_entity, project=wandb_project, group=suite_name,
                     name=f'{suite_name}-comparison', job_type='comparison') as run:
-        table = wandb.Table(columns=['case', 'sql_loss', 'english_loss', 'steady_non_pad_tokens_per_sec'])
+        table = wandb.Table(columns=['case', 'sql_loss', 'steady_non_pad_tokens_per_sec'])
         for case, result in zip(cases, results):
             metrics = result['last_metrics']
-            table.add_data(case['label'], metrics['val/sql_loss'], metrics['val/english_loss'],
+            table.add_data(case['label'], metrics['val/sql_loss_filtered_all'],
                            result['steady_global_non_pad_tokens_per_sec'])
         run.log({'comparison/results': table,
                  'comparison/sql_loss': wandb.plot.bar(table, 'case', 'sql_loss', title='Standalone filtered SQL validation'),
@@ -92,7 +95,7 @@ def run_suite(cases: list[dict], suite_name: str, wandb_entity: str, wandb_proje
 def main(part: str = 'a', max_steps: int = 0, micro_batch_size: int = 0,
          seq_len: int = 2048, sql_fraction: float = 0.5, wandb_entity: str = '',
          wandb_project: str = 'sqlgen-day6') -> None:
-    """Submit A or B; arguments are documented in experiment_plan and the guide.
+    """Spawn A, B, or the A1/A2/B1/B2 combined suite (part=ab); arguments are documented in experiment_plan and the guide.
 
     max_steps/micro_batch_size=0 select curriculum defaults. Use --detach for
     long suites. No run-name reuse or automatic resume: each call gets a UUID.
@@ -102,4 +105,6 @@ def main(part: str = 'a', max_steps: int = 0, micro_batch_size: int = 0,
     cases = experiment_plan(part, max_steps, micro_batch_size, seq_len, sql_fraction)
     suite_name = f'part-{part}-{uuid.uuid4().hex[:12]}'
     print(json.dumps({'suite': suite_name, 'cases': cases}, indent=2), flush=True)
-    print(json.dumps(run_suite.remote(cases, suite_name, wandb_entity, wandb_project), indent=2))
+    call = run_suite.spawn(cases, suite_name, wandb_entity, wandb_project)
+    print(json.dumps({'suite': suite_name, 'call_id': call.object_id,
+                      'results': f'/vol/checkpoints/day6/{suite_name}/comparison.json'}), flush=True)
