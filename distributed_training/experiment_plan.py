@@ -1,4 +1,10 @@
-"""Explicit A1/A2/A3 and B1/B2 settings, independent of GPU allocation."""
+"""Describe experiments before allocating hardware or launching processes.
+
+A: change the number of GPUs while preserving the global batch, then show a
+   deliberately duplicated-data case. B: change only gradient sync timing.
+Returning plain dictionaries makes the plan readable in launcher logs and
+serializable as JSON for torchrun workers and as W&B run configuration.
+"""
 from dataclasses import asdict
 from train_pretrain import TrainConfig
 
@@ -15,21 +21,38 @@ def experiment_plan(part: str, max_steps: int = 0, micro_batch_size: int = 0,
     The larger preset is named by dimensions, not a misleading parameter count:
     the saved Qwen tokenizer makes the embedding alone larger than 100M.
     """
+    # The combined suite is explicitly ordered, not parallel: one case must
+    # exit successfully before the next begins. Slice away A3 because the user
+    # requested A1 -> A2 -> B1 -> B2 for this suite.
     if part == 'ab':
         a = experiment_plan('a', max_steps, micro_batch_size, seq_len, sql_fraction)
         b = experiment_plan('b', max_steps, micro_batch_size, seq_len, sql_fraction)
         return a[:2] + b
     if part not in {'a', 'b'} or max_steps < 0 or micro_batch_size < 0:
         raise ValueError('part must be a/b/ab; steps and microbatch must be nonnegative')
+    # Zero is a CLI sentinel for "use the experiment default". An explicit
+    # --max-steps affects both parts in a combined run; leaving it zero keeps
+    # A at 300 updates and B at 100. This is an update count, not an epoch count.
     steps = max_steps or (300 if part == 'a' else 100)
     batch = micro_batch_size or (8 if part == 'a' else 4)
+    # Tuple fields: (human label, GPU/process count, accumulation steps,
+    #                deliberately duplicate data?, defer gradient sync?).
+    # A1: 8*8*1 = 64 sequences/update; A2: 8*4*2 = 64 sequences/update.
+    # B1/B2 both use 4*8*2 = 64; only the final tuple flag changes.
     cases = [('A1-single-reference', 1, 8, False, True),
              ('A2-ddp-distinct-draws', 2, 4, False, True),
              ('A3-ddp-duplicate-draws', 2, 4, True, True)] if part == 'a' else [
              ('B1-sync-every-microbatch', 2, 8, False, False),
              ('B2-sync-last-microbatch', 2, 8, False, True)]
+    # An empty model dict inherits TransformerConfig's smaller defaults.
+    # Naming the larger model by dimensions avoids assuming "135M": the
+    # tokenizer vocabulary can dominate its actual trainable parameter count.
     model = {} if part == 'a' else dict(n_layers=12, d_model=768, n_heads=12,
                                        n_kv_heads=4, ffn_dim=2048)
+    # benchmark_warmup removes cold initial updates from throughput summaries.
+    # It is DISTINCT from learning-rate warmup_steps. Tiny checks retain at
+    # least one timed update but are not reliable steady-state benchmarks.
+    # asdict converts the frozen TrainConfig into a JSON-compatible snapshot.
     return [dict(label=label, world_size=world, duplicate=duplicate, no_sync=no_sync,
                  model=model, benchmark_warmup=min(10, max(0, steps - 1)),
                  train=asdict(TrainConfig(mode='masked_pack', micro_batch_size=batch,

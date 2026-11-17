@@ -1,4 +1,10 @@
-"""Verify assignment and real two-process gradient math before GPU experiments."""
+"""Executable learning checks for distributed-training invariants.
+
+These use tiny synthetic data, not the Modal corpus. The real two-process test
+checks the numerical objective as well as communication frequency, because a
+program can run without hanging while silently optimizing the wrong average.
+The final tests guard spawn-only submission and filtered SQL-only evaluation.
+"""
 import copy
 from pathlib import Path
 import tempfile
@@ -35,18 +41,29 @@ def _counting_average(state, bucket):
 
 
 def _two_rank_check(rank, rendezvous):
+    """CPU worker launched by mp.spawn; rank is 0/1, rendezvous is a file URI.
+
+    The shared rendezvous connects Gloo processes on this machine. One CPU
+    thread per process keeps this tiny regression test inexpensive. Real CUDA
+    correctness is checked separately by cuda_preflight on the allocated GPUs.
+    """
     torch.set_num_threads(1)
     dist.init_process_group('gloo', init_method=rendezvous, rank=rank, world_size=2)
     try:
         torch.manual_seed(7)
         initial = Transformer(TransformerConfig(vocab_size=16, d_model=16, n_layers=1,
                                                 n_heads=2, n_kv_heads=1, ffn_dim=32, max_seq_len=8))
+        # Distinct document lengths give distinct target counts; otherwise an
+        # incorrect average of rank means could accidentally pass the test.
         all_batches = [make_batch(TinyCorpus(i), mode='masked_pack', batch_size=1, seq_len=8,
                                   sql_fraction=1, pad_id=0, rng=batch_rng(42, 1, i),
                                   validation_kind='sql') for i in range(4)]
         reference = copy.deepcopy(initial)
         accumulated_backward(reference, all_batches, torch.device('cpu'), world_size=1,
                              no_sync=False, loss_chunk_size=2, bf16=False)
+        # Tiny model fits one gradient bucket: two backwards produce two
+        # reductions normally, versus one on the final backward with no_sync.
+        # This exact bucket count is a test fixture, not a production promise.
         for no_sync, expected_calls in ((False, 2), (True, 1)):
             raw = copy.deepcopy(initial)
             ddp = torch.nn.parallel.DistributedDataParallel(raw, broadcast_buffers=False)
@@ -111,6 +128,8 @@ class DDPPartsTests(unittest.TestCase):
         from unittest.mock import patch, MagicMock
         import modal_ddp_parts_ab as launcher
         call = MagicMock(object_id='fc-test')
+        # Mocking the cloud boundary proves the CLI submits without allocating
+        # hardware or waiting for remote results during the unit test.
         with patch.object(launcher, 'run_suite') as suite, patch('builtins.print'):
             suite.spawn.return_value = call
             launcher.main(part='ab', wandb_entity='test')
