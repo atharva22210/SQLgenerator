@@ -287,6 +287,10 @@ metadata with the evaluation account, and stores the result under `rag/` on
 `post-train-data`. See [the data walkthrough](docs/rag-data.md) for the exact
 files, split policy, limitations and CPU-only reproduction command.
 
+V1 now provides BM25 search, an optional authenticated local API, and separate
+global/database-scoped development evaluation. Start with the commands and
+learning notes in [the BM25 walkthrough](docs/rag-v1-bm25.md).
+
 ## Shared-volume check
 
 Both teammates must access workspace `sanika-05`, environment `main`, and the
