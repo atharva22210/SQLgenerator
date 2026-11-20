@@ -1,6 +1,6 @@
 # V1: explainable BM25 schema retrieval
 
-Read `rag/bm25.py`, then `rag/cli.py`, then `rag/service.py`. Their docstrings
+Read `rag/bm25/index.py`, then `rag/common/cli.py`, then `rag/common/service.py`. Their docstrings
 explain arguments, representations and the boundaries between retrieval and
 evaluation. This milestone implements retrieval, not SQL generation or training.
 
@@ -24,8 +24,9 @@ See [Elastic's BM25 explanation](https://www.elastic.co/blog/practical-bm25-part
 
 `customer_id` and `customerId` become customer/id; case is normalized. We do
 not add stemming, synonyms or learned embeddings in this baseline. A question
-using "buyers" can miss a table named "customers"; dense retrieval is a future
-comparison. Rare opaque database IDs and repeated document-template headings
+using "buyers" can miss a table named "customers"; the dense implementation in
+[rag/README.md](../rag/README.md) provides a comparison to evaluate separately.
+Rare opaque database IDs and repeated document-template headings
 are excluded from scoring. Search text uses table/domain/column/key metadata.
 
 An inverted index maps terms to matching document IDs and their frequencies.
