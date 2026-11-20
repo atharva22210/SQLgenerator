@@ -279,6 +279,14 @@ To verify the smoke output, add `--smoke --run-id d4c0ffee0001` to the
 Add `--validate-only` to that local command to separate validation from writing
 Parquet files. Local output is not automatically uploaded to Modal.
 
+## RAG schema collection
+
+The first RAG data bundle reuses the verified post-training MySQL databases.
+It separates searchable table schemas from question/SQL labels, checks live
+metadata with the evaluation account, and stores the result under `rag/` on
+`post-train-data`. See [the data walkthrough](docs/rag-data.md) for the exact
+files, split policy, limitations and CPU-only reproduction command.
+
 ## Shared-volume check
 
 Both teammates must access workspace `sanika-05`, environment `main`, and the
