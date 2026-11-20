@@ -279,6 +279,27 @@ To verify the smoke output, add `--smoke --run-id d4c0ffee0001` to the
 Add `--validate-only` to that local command to separate validation from writing
 Parquet files. Local output is not automatically uploaded to Modal.
 
+## RAG schema collection
+
+The first RAG data bundle reuses the verified post-training MySQL databases.
+It separates searchable table schemas from question/SQL labels, checks live
+metadata with the evaluation account, and stores the result under `rag/` on
+`post-train-data`. See [the data walkthrough](docs/rag-data.md) for the exact
+files, split policy, limitations and CPU-only reproduction command.
+
+V1 now provides BM25 search, an optional authenticated local API, and separate
+global/database-scoped development evaluation. Start with the commands and
+learning notes in [the BM25 walkthrough](docs/rag-v1-bm25.md).
+
+BM25, dense, hybrid and hybrid + graph share catalogue checks, filtering, evaluation and
+the local API. See [the RAG guide](rag/README.md) for the folder structure,
+frozen MiniLM encoder, and `uv run` commands for each backend.
+The [graph walkthrough](rag/hybrid_graph/README.md) explains query-dependent
+foreign-key path costs and how bridge tables expand the schema context.
+Independent plain-hybrid refinements support
+[column selection with key retention](rag/hybrid_columns/README.md) and
+[cross-encoder reranking](rag/hybrid_rerank/README.md).
+
 ## Shared-volume check
 
 Both teammates must access workspace `sanika-05`, environment `main`, and the

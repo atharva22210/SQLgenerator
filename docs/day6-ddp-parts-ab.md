@@ -92,10 +92,10 @@ Do not change several variables while interpreting a speed comparison.
 
 Only rank 0 logs per-update metrics to W&B (`sqlgen-day6`) and writes the final
 model/optimizer snapshot. Rank 0 validates the unwrapped model while other
-ranks wait; a rank-only DDP forward could hang on collectives. English/SQL
-validation uses fixed standalone documents and the SQL overlap filter. The
-standard validation sample is 8 documents per corpus, not the full 4,388-task
-SQL evaluation; log/interpret that sampling limitation.
+ranks wait; a rank-only DDP forward could hang on collectives. Validation is filtered SQL only: a fixed sample of 8 standalone documents
+periodically, plus a complete pass over all retained tasks at the final update.
+The final full-set metric is `val/sql_loss_filtered_all`, distinct from the
+periodic sampled `val/sql_loss`. No English validation loss is computed.
 
 All cases share a unique W&B group; a comparison run adds SQL-loss and
 throughput bar charts. Snapshots and JSON results are stored under
@@ -117,3 +117,19 @@ no_sync changes gradient bucket communication from twice to once. Existing
 CUDA-only tests are skipped without CUDA. Passing CPU tests does not establish
 NCCL/BF16 performance or actual two-A10 correctness; use the small GPU checks
 above before longer experiments.
+
+## Spawn A1, A2, B1, B2 sequentially
+
+```bash
+uv run --locked modal run --detach --env main --profile sanika-05 \
+  modal_ddp_parts_ab.py --part ab --wandb-entity dkbsingh7-iit-delhi
+```
+
+The local entrypoint calls `run_suite.spawn()` and prints a call ID, then
+returns. The detached suite continues remotely. A3 is excluded. Steps default
+to 300, 300, 100, 100. Every suite first runs a tiny two-GPU NCCL/BF16 test of
+checkpointed-loss gradients with and without no_sync, plus finite fused AdamW
+updates. Failure aborts before the long runs. This gate tests kernels and
+communication, not full-size batch memory fit. Errors in any case stop later
+cases. Check each rank-0 W&B run and the final comparison run under the shared
+suite group; the parent commits each completed checkpoint to the Volume.

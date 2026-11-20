@@ -2,6 +2,15 @@
 
 Launched by modal_ddp_parts_ab.py, not directly by `modal run`. Paths and
 hyperparameters arrive in an explicit JSON file shared by all local ranks.
+
+Trace one update here:
+    deterministic CPU batches -> zero gradients -> local backwards with DDP
+    -> clip the synchronized global gradient -> AdamW step -> global metrics.
+
+DDP is data parallelism: each rank stores a FULL model, gradients and optimizer
+state. Input data is assigned explicitly; DDP does not shard the dataset for
+us. CUDA/NCCL communicates gradients; only rank 0 owns W&B and output files.
+The initial and validation scans are outside the measured training-update time.
 """
 from dataclasses import asdict
 from datetime import timedelta
@@ -19,11 +28,28 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from data.dataloader import Corpus, make_batch
 from distributed_training.ddp_core import accumulated_backward, batch_rng, microbatch_ids
 from model.transformer_35m import Transformer, TransformerConfig
-from train_pretrain import TrainConfig, _load_data_and_tokenizer, _evaluate, learning_rate
+from train_pretrain import TrainConfig, learning_rate
+from distributed_training.sql_validation import load_training_and_sql_validation, evaluate_sql
 
 
 def run(settings: dict) -> None:
     """Run one labeled A/B experiment, using the same code path for all cases.
+
+    Args:
+        settings: JSON-compatible dictionary written by the Modal parent.
+            train: TrainConfig fields (batch size, accumulation, LR, etc.).
+            model: TransformerConfig overrides, such as width and layers.
+            world_size: Expected number of GPU workers, checked against torchrun.
+            duplicate: Select repeated microbatch IDs for the intentional A3 bug.
+            no_sync: Suppress gradient sync on all but the last microbatch.
+            benchmark_warmup: Initial updates excluded from throughput summary;
+                learning-rate warmup is configured separately in train.
+            output_dir: New directory for this case's final snapshot/results.
+            run_name/group: Individual W&B label and shared suite identity.
+            wandb_entity/wandb_project: Experiment-tracking destination.
+
+    Returns:
+        None. Rank 0 writes result.json/final.pt and logs scalar metrics.
 
     settings contains train/model dataclass fields plus world_size, duplicate,
     no_sync, run_name, output_dir, benchmark_warmup, wandb_entity and project.
@@ -31,30 +57,44 @@ def run(settings: dict) -> None:
     filtered validation, and a final checkpoint. No implicit checkpoint resume:
     every experiment starts from the same seed and a new output directory.
     """
+    # torchrun launches the SAME Python module in each process and injects:
+    # RANK = identity among all workers; LOCAL_RANK = GPU index on this host;
+    # WORLD_SIZE = total cooperating workers. They coincide on our single host,
+    # but are different concepts when training spans several machines.
     rank = int(os.environ['RANK'])
     world = int(os.environ['WORLD_SIZE'])
     local_rank = int(os.environ['LOCAL_RANK'])
     if world != settings['world_size']:
         raise ValueError('torchrun world size differs from experiment settings')
+    # Bind before constructing CUDA tensors or NCCL collectives. Otherwise
+    # two workers might both allocate on GPU 0 and leave GPU 1 unused.
     torch.cuda.set_device(local_rank)
     device = torch.device('cuda', local_rank)
     if not torch.cuda.is_bf16_supported():
         raise RuntimeError('These experiments require CUDA BF16 support')
     distributed = world > 1
     if distributed:
+        # A process group is the set of participants in collective operations.
+        # NCCL is the CUDA communication backend. The long startup timeout also
+        # covers corpus indexing/filtering while another rank waits for rank 0.
         dist.init_process_group('nccl', timeout=timedelta(minutes=30))
     run_handle = None
     try:
         config = TrainConfig(**settings['train'])
         output = Path(settings['output_dir'])
         if rank == 0:
+            # Never silently resume/overwrite a previous experiment. The
+            # launcher supplies a fresh UUID-based suite directory each time.
             output.mkdir(parents=True, exist_ok=False)
-            tokenizer, corpus, validation = _load_data_and_tokenizer()
+            tokenizer, corpus, validation = load_training_and_sql_validation()
             identity = {'vocab_size': len(tokenizer), 'pad_id': tokenizer.pad_token_id,
                         'eos_id': tokenizer.eos_token_id}
         else:
             identity = None
         if distributed:
+            # Share only the small tokenizer identity, not the large corpus.
+            # broadcast_object_list mutates the receiver's list in place.
+            # Both ranks must use the same PAD/EOS IDs and vocabulary size.
             objects = [identity]
             dist.broadcast_object_list(objects, src=0, device=device)
             identity = objects[0]
@@ -62,15 +102,26 @@ def run(settings: dict) -> None:
             # Only rank 0 scans validation and filters overlap. Each worker has
             # its own read-only memmaps of training, with identical row indexes.
             corpus = Corpus(Path('/vol/pretrain_data'), 'train', identity['eos_id'])
+        # Identical initialization is essential for a fair A1/A2 comparison.
+        # Do NOT add rank here. Data randomness is separately keyed by each
+        # global microbatch ID, rather than perturbing model initialization.
         torch.manual_seed(config.seed)
         torch.cuda.manual_seed_all(config.seed)
         raw_model = Transformer(TransformerConfig(vocab_size=identity['vocab_size'],
                                                  max_seq_len=config.seq_len,
                                                  **settings['model'])).to(device)
+        # Keep raw_model for rank-only validation and prefix-free state_dicts;
+        # use the DDP wrapper for EVERY distributed training forward so its
+        # autograd hooks can schedule gradient reductions during backward.
+        # broadcast_buffers=False is appropriate for this model: RoPE tables
+        # are deterministic and it has no changing BatchNorm running statistics.
         model = (DDP(raw_model, device_ids=[local_rank], broadcast_buffers=False,
                      gradient_as_bucket_view=True) if distributed else raw_model)
         # BF16 autocast changes eligible compute; stored weights/gradients and
         # Adam moments stay FP32. Bucket views avoid a separate gradient copy.
+        # Decay matrix-shaped weights; leave 1-D normalization scales alone.
+        # Tied embeddings occur once in parameters(), avoiding duplicate updates.
+        # fused=True selects fused optimizer kernels, not mixed precision itself.
         decay = [p for p in raw_model.parameters() if p.ndim >= 2]
         no_decay = [p for p in raw_model.parameters() if p.ndim < 2]
         optimizer = torch.optim.AdamW([
@@ -78,6 +129,8 @@ def run(settings: dict) -> None:
             {'params': no_decay, 'weight_decay': 0.0},
         ], lr=config.peak_lr, betas=(0.9, 0.95), eps=1e-8, fused=True)
         parameter_count = sum(p.numel() for p in raw_model.parameters())
+        # Separate logging runs on every rank would duplicate metrics and
+        # create competing histories. One rank logs already-combined results.
         if rank == 0:
             import wandb
             run_handle = wandb.init(entity=settings['wandb_entity'], project=settings['wandb_project'],
@@ -95,6 +148,9 @@ def run(settings: dict) -> None:
             batches = [make_batch(corpus, mode=config.mode, batch_size=config.micro_batch_size,
                                   seq_len=config.seq_len, sql_fraction=config.sql_fraction,
                                   pad_id=identity['pad_id'], rng=batch_rng(config.seed, update, i)) for i in ids]
+            # Hash actual input IDs to expose identical sampled rank data.
+            # A3 should deliberately repeat hashes. This is an initial-data
+            # diagnostic, not proof of dataset-wide uniqueness/no leakage.
             if update == 1:
                 digest = hashlib.sha256(b''.join(b.input_ids.numpy().tobytes() for b in batches)).hexdigest()
                 hashes = [None] * world
@@ -109,9 +165,15 @@ def run(settings: dict) -> None:
             lr = learning_rate(update, config)
             for group in optimizer.param_groups:
                 group['lr'] = lr
+            # Clear ONCE per optimizer update. Clearing inside the microbatch
+            # loop would destroy gradient accumulation. None avoids explicitly
+            # zero-filling each gradient tensor before its next contribution.
             optimizer.zero_grad(set_to_none=True)
             if distributed:
                 dist.barrier()
+            # CUDA kernels are asynchronous with the CPU. Complete earlier
+            # work before starting the clock; the barrier aligns worker starts.
+            # Reset peak counters without discarding cached allocator storage.
             torch.cuda.synchronize(device)
             torch.cuda.reset_peak_memory_stats(device)
             started = time.perf_counter()
@@ -127,6 +189,9 @@ def run(settings: dict) -> None:
             memory = torch.tensor([torch.cuda.max_memory_allocated(device),
                                    torch.cuda.max_memory_reserved(device)], device=device, dtype=torch.float64)
             if distributed:
+                # A global update cannot finish before the slowest rank.
+                # SUM the loss NUMERATOR, MAX time/memory; averaging rank
+                # mean losses would be wrong when target counts differ.
                 dist.all_reduce(elapsed, op=dist.ReduceOp.MAX)
                 dist.all_reduce(local_loss_sum, op=dist.ReduceOp.SUM)
                 dist.all_reduce(memory, op=dist.ReduceOp.MAX)
@@ -139,6 +204,9 @@ def run(settings: dict) -> None:
             if update > settings['benchmark_warmup']:
                 timed_seconds += seconds
                 timed_tokens += tokens
+            # Slots include PAD; tokens excludes PAD; targets further excludes
+            # masked/unpredictable positions. Keep these meanings distinct.
+            # Rates count all rank occurrences (A3 still repeats actual data).
             slots = config.micro_batch_size * config.grad_accum_steps * world * config.seq_len
             metrics = {'train/loss': (local_loss_sum / counts[0]).item(),
                        'train/grad_norm': norm.item(), 'train/lr': lr,
@@ -155,8 +223,12 @@ def run(settings: dict) -> None:
                 if rank == 0:
                     # Use the UNWRAPPED model: other ranks wait at a barrier;
                     # a DDP forward here could hang on distributed collectives.
-                    metrics.update(_evaluate(raw_model, validation, config, identity['pad_id'], device))
+                    metrics.update(evaluate_sql(raw_model, validation, config, identity['pad_id'], device))
+                    if update == config.max_steps:
+                        metrics.update(evaluate_sql(raw_model, validation, config, identity['pad_id'], device, full=True))
                 if distributed:
+                    # Rank 1 must not start its next training collective while
+                    # rank 0 is still evaluating without DDP participation.
                     dist.barrier()
             if rank == 0:
                 run_handle.log(metrics, step=update)
@@ -169,6 +241,9 @@ def run(settings: dict) -> None:
             torch.save({'model': raw_model.state_dict(), 'optimizer': optimizer.state_dict(),
                         'update': config.max_steps, 'settings': settings,
                         'model_config': asdict(raw_model.config)}, temporary)
+            # Rename after writing the complete payload. This avoids a final
+            # filename that points to a partially written checkpoint. Durability
+            # on the shared Volume is the Modal parent's later commit step.
             os.replace(temporary, output / 'final.pt')
             summary = {'run_name': settings['run_name'], 'parameter_count': parameter_count,
                        'steady_global_non_pad_tokens_per_sec': timed_tokens / timed_seconds if timed_seconds else None,
@@ -179,6 +254,9 @@ def run(settings: dict) -> None:
         if distributed:
             dist.barrier()
     finally:
+        # Close tracking and distributed resources even when a worker raises.
+        # torchrun detects a failed worker and terminates its peers; a missing
+        # rank must not leave a later experiment falsely reported as successful.
         if run_handle is not None:
             run_handle.finish()
         if dist.is_initialized():
