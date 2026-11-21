@@ -171,7 +171,7 @@ a marked excerpt. The binaries are ready for training after the job publishes
 
 The launcher pins the latest completed compatible build for the entire suite. To
 reproduce a specific build, pass
-`--grouped-sql-dir /vol/bpe_tokenization/pretrain_data/grouped_sql/<corpus_id>`.
+`--grouped-sql-dir /vol/bpe_tokenization/pretrain_data`.
 
 Preprocessing stages text and normalized SQL hashes in local SQLite scratch
 space. Four CPU processes fingerprint SQL by default. A single writer consumes

@@ -147,17 +147,17 @@ def build(tokenizer_build: str = "", build_id: str = ""):
     base = AutoTokenizer.from_pretrained(find_tokenizer_path(), local_files_only=True)
     if any(meta["tokenizer_sha256"] != tokenizer_fingerprint(base) for meta in (english, sql_meta)):
         raise ValueError("Source tokenizer fingerprint mismatch")
-    root = Path("/vol/byte_bpe") / (build_id or uuid4().hex)
+    root = Path("/vol/bpe_tokenization/builds") / (build_id or uuid4().hex)
     tokenizer_dir = root / "tokenizer"
     data = root / "pretrain_data"
-    grouped = data / "grouped_sql" / sql.name
+    grouped = data
     parts = root / "parts"
-    for directory in (tokenizer_dir, grouped, parts):
+    for directory in (tokenizer_dir, data, parts):
         directory.mkdir(parents=True)
     print(f"Build {root}", flush=True)
     if tokenizer_build:
         # Reuse the fitted tokenizer; isolated output avoids trusting partial shards.
-        saved = Path("/vol/byte_bpe") / tokenizer_build / "tokenizer"
+        saved = Path("/vol/bpe_tokenization/builds") / tokenizer_build / "tokenizer"
         shutil.copytree(saved, tokenizer_dir, dirs_exist_ok=True)
         bpe = AutoTokenizer.from_pretrained(tokenizer_dir, local_files_only=True)
         volume.commit()
@@ -203,7 +203,7 @@ def build(tokenizer_build: str = "", build_id: str = ""):
             for field in ("datasets", "dataset_revisions"):
                 metadata[field] = {"english": original[field]["english"]}
         metadata["token_counts"] = {k: v["tokens"] for k,v in summary.items() if k.startswith(kind)}
-        (dest / "metadata.json").write_text(json.dumps(metadata, indent=2))
+        (dest / ("sql_metadata.json" if kind == "sql" else "metadata.json")).write_text(json.dumps(metadata, indent=2))
     (root / "summary.json").write_text(json.dumps(summary, indent=2))
     volume.commit()
     return str(root), summary
@@ -213,5 +213,5 @@ def build(tokenizer_build: str = "", build_id: str = ""):
 def main(tokenizer_build: str = ""):
     build_id = uuid4().hex
     call = build.spawn(tokenizer_build, build_id)
-    print(f"Corpus output /vol/byte_bpe/{build_id}", flush=True)
+    print(f"Corpus output /vol/bpe_tokenization/builds/{build_id}", flush=True)
     print(f"Submitted {call.object_id}", flush=True)

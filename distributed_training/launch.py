@@ -111,7 +111,7 @@ def run_suite(cases: list[dict], suite_name: str, wandb_entity: str, wandb_proje
     # Bind the full suite to one completed split even if another build
     # publishes during the experiment.
     requested = cases[0].get('grouped_sql_dir')
-    grouped_sql_dir, _ = resolve_grouped_sql(DATA_DIR, Path(requested) if requested else None)
+    grouped_sql_dir, sql_metadata = resolve_grouped_sql(DATA_DIR, Path(requested) if requested else None)
     # Cheap kernel/collective gate; abort before any curriculum run on failure.
     subprocess.run([sys.executable, '-m', 'torch.distributed.run', '--standalone',
                     '--nproc_per_node=2', '-m', 'distributed_training.cuda_preflight'], check=True)
@@ -122,10 +122,10 @@ def run_suite(cases: list[dict], suite_name: str, wandb_entity: str, wandb_proje
     # stable corpus ID in config and a short prefix for scanning the run list.
     started = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     first_train = cases[0]['train']
-    group = (f'{purpose} · Grouped SQL {grouped_sql_dir.name[:8]} · '
+    group = (f'{purpose} · Grouped SQL {sql_metadata["corpus_id"][:8]} · '
              f'{first_train["seq_len"]:,} tokens · {started}')
     tracking_config = {'suite_id': suite_name, 'grouped_sql_dir': str(grouped_sql_dir),
-                       'corpus_id': grouped_sql_dir.name}
+                       'corpus_id': sql_metadata['corpus_id']}
     results = []
     # One enclosing remote function makes sequencing durable after the laptop
     # disconnects. Spawning each case separately without dependencies would
@@ -285,9 +285,9 @@ def main(part: str = 'a', max_steps: int = 0, micro_batch_size: int = 0,
         cases = matching
     if grouped_sql_dir:
         directory = Path(grouped_sql_dir)
-        if directory.parent != DATA_DIR / 'grouped_sql' or len(directory.name) != 32 or any(
+        if directory != DATA_DIR and (directory.parent != DATA_DIR / 'grouped_sql' or len(directory.name) != 32 or any(
             char not in '0123456789abcdef' for char in directory.name
-        ):
+        )):
             raise ValueError('Expected a completed corpus under the configured training build grouped_sql directory')
         cases = [{**planned, 'grouped_sql_dir': str(directory)} for planned in cases]
     suite_labels = {'a': 'ddp-correctness', 'b': 'ddp-gradient-sync', 'ab': 'ddp-correctness-and-sync',

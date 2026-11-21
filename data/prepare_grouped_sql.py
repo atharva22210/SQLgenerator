@@ -104,8 +104,7 @@ def prepare(seed: int, corpus_id: str, fingerprint_workers: int = 4) -> dict:
     repository_sql = load_dataset(REPOSITORY_SQL, data_dir="sql", split="train", streaming=True,
                                   revision=revisions[REPOSITORY_SQL], token=True,
                                   columns=["max_stars_repo_name", "content"])
-    parent = OUTPUT_PATH / "grouped_sql"
-    output = parent / corpus_id
+    output = OUTPUT_PATH.parent / "builds" / corpus_id / "pretrain_data"
     with TemporaryDirectory() as scratch:
         db = sqlite3.connect(Path(scratch) / "split.sqlite")
         try:
@@ -128,11 +127,11 @@ def prepare(seed: int, corpus_id: str, fingerprint_workers: int = 4) -> dict:
             print(json.dumps({"staging": staging, "audit": audit}), flush=True)
             output.mkdir(parents=True, exist_ok=False)
             examples = {split: split_examples(db, split) for split in ("train", "val")}
-            (output / "examples.json").write_text(json.dumps(examples, indent=2) + "\n")
+            (output / "sql_examples.json").write_text(json.dumps(examples, indent=2) + "\n")
             # Publish the audited preview early. Readers still require
             # metadata.json, which appears only after both bins are complete.
             volume.commit()
-            print(f"Audited examples ready at {output / 'examples.json'}", flush=True)
+            print(f"Audited examples ready at {output / 'sql_examples.json'}", flush=True)
             counts = {f"sql_{split}": write_split(db, split, output / f"sql_{split}.bin", tokenizer)
                       for split in ("train", "val")}
         finally:
@@ -144,7 +143,7 @@ def prepare(seed: int, corpus_id: str, fingerprint_workers: int = 4) -> dict:
                     staging=staging, staging_perf=staging_perf, audit=audit)
     temporary = output / "metadata.tmp"
     temporary.write_text(json.dumps(metadata, indent=2) + "\n")
-    temporary.replace(output / "metadata.json")
+    temporary.replace(output / "sql_metadata.json")
     volume.commit()
     return {"directory": str(output), **metadata}
 
@@ -157,6 +156,6 @@ def main(seed: int = 42, submit_only: bool = False, fingerprint_workers: int = 4
     corpus_id = uuid4().hex
     call = prepare.spawn(seed, corpus_id, fingerprint_workers)
     print(f"Submitted grouped SQL preparation: {call.object_id}", flush=True)
-    print(f"Corpus directory: {OUTPUT_PATH / 'grouped_sql' / corpus_id}", flush=True)
+    print(f"Corpus directory: {OUTPUT_PATH.parent / 'builds' / corpus_id / 'pretrain_data'}", flush=True)
     if not submit_only:
         print(json.dumps(call.get(), indent=2), flush=True)

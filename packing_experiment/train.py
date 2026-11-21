@@ -122,7 +122,7 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
         if not state.get("grouped_sql_dir"):
             raise ValueError(f"Checkpoint predates Grouped SQL. Use a new run name: {path}")
     saved_dir = Path(state["grouped_sql_dir"]) if state is not None else None
-    grouped_sql_dir, _ = resolve_grouped_sql(DATA_DIR, saved_dir)
+    grouped_sql_dir, sql_metadata = resolve_grouped_sql(DATA_DIR, saved_dir)
     tokenizer, train, validation = _load_data_and_tokenizer(grouped_sql_dir, reload_volume=False)
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
@@ -165,11 +165,11 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
     with wandb.init(
         entity=wandb_entity, project=wandb_project,
         name=f"Packing · {MODE_TITLES[config.mode]} · {config.lr_schedule} · seed {config.seed}",
-        group=f"Packing · Grouped SQL {grouped_sql_dir.name[:8]} · {config.seq_len:,} tokens",
+        group=f"Packing · Grouped SQL {sql_metadata['corpus_id'][:8]} · {config.seq_len:,} tokens",
         job_type="training",
         id=wandb_id, resume="allow", config={**asdict(config), "parameter_count": parameter_count,
                                               "grouped_sql_dir": str(grouped_sql_dir),
-                                              "corpus_id": grouped_sql_dir.name, "checkpoint_name": run_name,
+                                              "corpus_id": sql_metadata['corpus_id'], "checkpoint_name": run_name,
                                               "gpu": torch.cuda.get_device_name(),
                                               "compute_dtype": "bfloat16", "parameter_dtype": "float32"},
         settings=wandb.Settings(init_timeout=120),
