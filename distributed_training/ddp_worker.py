@@ -26,7 +26,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from data.dataloader import Corpus, make_batch
-from distributed_training.part_c import export_profile, prepare_model, profile_update
+from distributed_training.fsdp_checkpointing import export_profile, prepare_model, profile_update
 from distributed_training.ddp_core import accumulated_backward, batch_rng, microbatch_ids
 from model.transformer_35m import Transformer, TransformerConfig
 from data.grouped_corpus import resolve_grouped_sql

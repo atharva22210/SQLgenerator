@@ -5,7 +5,7 @@ import unittest
 import torch
 
 from distributed_training.experiment_plan import experiment_plan
-from distributed_training.part_c import kernel_times, prepare_model
+from distributed_training.fsdp_checkpointing import kernel_times, prepare_model
 from model.transformer_35m import Transformer, TransformerConfig
 
 

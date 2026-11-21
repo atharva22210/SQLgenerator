@@ -34,7 +34,7 @@ def experiment_plan(part: str, max_steps: int = 0, micro_batch_size: int = 0,
                             eval_every=eval_every, val_batches=val_batches)
         return a[:2] + b
     if part == 'c' and min(max_steps, micro_batch_size) >= 0:
-        from distributed_training.part_c import part_c_plan
+        from distributed_training.fsdp_checkpointing import part_c_plan
         return part_c_plan(max_steps, micro_batch_size, seq_len, sql_fraction,
                            eval_every, val_batches, checkpoint_blocks, accumulation)
     if part not in {'a', 'b'} or max_steps < 0 or micro_batch_size < 0:
