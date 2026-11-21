@@ -14,7 +14,17 @@ def resolve_grouped_sql(data_dir: Path, explicit: Path | None = None) -> tuple[P
     compatible completion manifest makes it eligible for automatic selection.
     """
     root = data_dir / "grouped_sql"
-    if explicit is not None:
+    flat = data_dir / "sql_metadata.json"
+    if explicit is not None and (explicit / "sql_metadata.json").is_file():
+        directory = explicit
+        metadata = json.loads((directory / "sql_metadata.json").read_text())
+    elif flat.is_file() and (explicit is None or explicit == data_dir or not explicit.exists()):
+        directory = data_dir
+        metadata = json.loads(flat.read_text())
+        # Older checkpoints pin the version directory by corpus ID.
+        if explicit not in (None, data_dir) and explicit.name != metadata["corpus_id"]:
+            raise ValueError(f"Saved corpus {explicit} differs from {flat}")
+    elif explicit is not None:
         directory = explicit
         metadata = json.loads((directory / "metadata.json").read_text())
     else:

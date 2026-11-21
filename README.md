@@ -430,7 +430,7 @@ is reported as an error rather than silently switching to offline logging.
 `data/prepare_pretrain_data.py` prepares the FineWeb-Edu `sample-10BT`
 English files on the Modal volume. Use the [Grouped SQL preparation
 job](distributed_training/README.md#grouped-sql-corpus) for SQL. Both training experiments
-require a completed Grouped SQL build under `/vol/bpe_tokenization/pretrain_data/grouped_sql/`.
+require a completed Grouped SQL build under `/vol/bpe_tokenization/pretrain_data/`.
 The newest compatible completed build is selected by default.
 
 The English preparation job uses the locked CPU environment (Python 3.13.15,
