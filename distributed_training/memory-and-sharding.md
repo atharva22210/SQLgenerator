@@ -1,5 +1,8 @@
 # Memory and sharding on two A10s
 
+[fsdp_checkpointing.py](fsdp_checkpointing.py) defines the benchmark cases, wraps
+model blocks for sharding and checkpointing, and exports GPU profiles.
+
 C3 has 24 blocks at width 1536, with 24 query heads, 12 KV heads, and SwiGLU width 4096. It has 622,929,408 parameters before the tied vocabulary matrix. Add `1536 × vocab_size` for the loaded tokenizer and multiply by 16 bytes to estimate DDP model-state memory on each GPU. The earlier ~26 GB estimate for state plus activations used a hypothetical activation budget. With the saved 151,670-token vocabulary, C3 has 855,894,528 trainable parameters and about 12.75 GiB of DDP model state per GPU. The baseline tests the OOM prediction.
 
 The suite runs plain DDP, DDP with block activation checkpointing, FSDP `SHARD_GRAD_OP`, FSDP `FULL_SHARD`, and `FULL_SHARD` with block activation checkpointing. Both checkpointed cases replay the first 12 of 24 blocks by default. All cases share the seed, batches, BF16 compute, FP32 optimizer state, and checkpointed vocabulary-loss chunks. By default, each rank accumulates two microbatches of four rows of 2,048 slots for each of 20 updates. DDP synchronizes the accumulated gradients on the last microbatch. FSDP reduce-scatters gradients on every microbatch so accumulated gradients remain sharded. FSDP `no_sync` would defer that reduction while holding full gradients and would still need parameter gathers.
