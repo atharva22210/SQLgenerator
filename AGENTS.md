@@ -33,6 +33,21 @@ reviewable, and safe for teammates working in parallel.
 - After experiments, compare observations with predictions, explain plausible
   causes and uncertainty, and discuss what the next experiment would test.
   Do not silently change several experimental variables at once.
+- Keep a separate analytical takeaway file for each experiment, organized as:
+  question, prediction, controlled settings, measured results, explanation,
+  limitations, and next experiment. Keep takeaways inside the associated
+  experiment's folder, alongside its code; do not create a separate takeaways
+  directory. Preserve the settings and source links for
+  historical results. Label unmeasured predictions clearly; never invent results.
+  For repeated-seed comparisons, report individual results, the mean, and sample
+  standard deviation (including the number of seeds). Treat a small seed count
+  and thresholds such as twice that deviation as uncertainty heuristics, not
+  proof that a difference is statistically significant.
+- Reuse the shared training loop and existing memory optimizations. Keep code
+  readable and efficient, explain important invariants, and test learning-rate
+  schedule boundaries, checkpoint resume, and metric logging. Before a costly
+  sweep, use a bounded smoke run to verify memory fit and inspect the actual
+  W&B history and chart data; configured logging alone does not prove graphs work.
 - Explicitly requested setup and routine implementation may proceed directly,
   with explanations of what was done and why. Do not turn every command or
   line of code into a lesson or require repeated approval for authorized work.

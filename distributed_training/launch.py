@@ -22,14 +22,14 @@ import uuid
 
 import modal
 from data.grouped_corpus import resolve_grouped_sql
-from training_common import DATA_DIR, image as base_image, volume, wandb_secret
+from training.config import DATA_DIR, image as base_image, volume, wandb_secret
 from distributed_training.experiment_plan import experiment_plan
 
 app = modal.App('sqlgen-distributed-training')
 # Dependency installation and code shipping are different: the locked image
 # supplies PyTorch etc.; these additions make our Python modules importable
 # under /root for the subprocesses launched by torchrun.
-image = base_image.add_local_python_source('distributed_training')
+image = base_image
 
 
 # Stable labels remain the CLI selectors and output paths. These titles are
@@ -246,7 +246,8 @@ def main(part: str = 'a', max_steps: int = 0, micro_batch_size: int = 0,
          seq_len: int = 4096, sql_fraction: float = 0.5, wandb_entity: str = '',
          wandb_project: str = 'sqlgen-distributed-training', grouped_sql_dir: str = '',
          eval_every: int = 0, val_batches: int = 128,
-         checkpoint_blocks: int = 12, accumulation: int = 2, case: str = '') -> None:
+         checkpoint_blocks: int = 12, accumulation: int = 2, case: str = '',
+         initializer_range: float = 0.02) -> None:
     """Spawn A/B, their combined suite, or the Part C memory experiment.
 
     Args:
@@ -263,6 +264,7 @@ def main(part: str = 'a', max_steps: int = 0, micro_batch_size: int = 0,
         checkpoint_blocks: Part C block count for both checkpointed cases.
         accumulation: Part C microbatches per GPU per optimizer update.
         case: Optional exact Part C label, for rerunning one case by itself.
+        initializer_range: Normal weight standard deviation, shared by every case/rank.
     Returns:
         None; prints a durable Modal function-call ID and result directory.
 
@@ -274,7 +276,8 @@ def main(part: str = 'a', max_steps: int = 0, micro_batch_size: int = 0,
     eval_every = eval_every or (5 if part == 'c' else 25)
     cases = experiment_plan(part, max_steps, micro_batch_size, seq_len, sql_fraction,
                             eval_every=eval_every, val_batches=val_batches,
-                            checkpoint_blocks=checkpoint_blocks, accumulation=accumulation)
+                            checkpoint_blocks=checkpoint_blocks, accumulation=accumulation,
+                            initializer_range=initializer_range)
     if case:
         if part != 'c':
             raise ValueError('--case requires --part c')

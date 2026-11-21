@@ -5,7 +5,7 @@ import random
 import torch
 
 from data.dataloader import make_batch
-from training_common import _load_data_and_tokenizer
+from training.config import _load_data_and_tokenizer
 
 
 def load_training_and_sql_validation(grouped_sql_dir: Path | None = None, *, reload_volume: bool = True):

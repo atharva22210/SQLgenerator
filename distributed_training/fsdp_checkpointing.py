@@ -9,16 +9,18 @@ import torch
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper
 
-from training_common import TrainConfig
+from training.config import TrainConfig
 
 
 def part_c_plan(steps: int, batch: int, seq_len: int, sql_fraction: float,
                 eval_every: int, val_batches: int, checkpoint_blocks: int,
-                accumulation: int) -> list[dict]:
+                accumulation: int, *, initializer_range: float = 0.02) -> list[dict]:
     """Return JSON-ready C3 baseline and fixes; batch and accumulation are per GPU.
 
     checkpoint_blocks selects the first N of 24 blocks in both checkpointed
     runs. Vocabulary-loss chunking remains enabled identically in every run.
+    initializer_range is fixed across wrappers so memory comparisons do not also
+    change the initial model distribution.
     """
     if not 1 <= checkpoint_blocks <= 24:
         raise ValueError('Part C requires between 1 and 24 checkpointed blocks')
@@ -27,7 +29,7 @@ def part_c_plan(steps: int, batch: int, seq_len: int, sql_fraction: float,
                         grad_accum_steps=accumulation, max_steps=steps,
                         warmup_steps=min(steps, 5), seq_len=seq_len,
                         sql_fraction=sql_fraction, eval_every=eval_every,
-                        val_batches=val_batches)
+                        val_batches=val_batches, initializer_range=initializer_range)
     cases = [
         ('C3-ddp-baseline', 'ddp', 0),
         ('C3-fix1-ddp-checkpoint', 'ddp', checkpoint_blocks),

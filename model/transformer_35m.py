@@ -18,6 +18,7 @@ can use substantial memory. Measure GPU memory before choosing a microbatch.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import torch
 from torch import Tensor, nn
@@ -71,6 +72,8 @@ class TransformerConfig:
         rope_theta: Base used to make RoPE's rotation frequencies.
         norm_eps: Small constant preventing division by zero in RMSNorm.
         use_qk_norm: Normalize queries and keys per head before RoPE if True.
+        initializer_range: Standard deviation for normal initialization of linear
+            and embedding weights; default 0.02 follows the HF Llama implementation.
     """
 
     vocab_size: int
@@ -83,9 +86,13 @@ class TransformerConfig:
     rope_theta: float = 10_000.0
     norm_eps: float = 1e-5
     use_qk_norm: bool = False
+    initializer_range: float = 0.02
 
     def __post_init__(self) -> None:
         """Reject dimensions that cannot be reshaped into attention heads."""
+        if (isinstance(self.initializer_range, bool)
+                or not math.isfinite(self.initializer_range) or self.initializer_range <= 0):
+            raise ValueError("initializer_range must be finite and positive")
         if min(self.vocab_size, self.d_model, self.n_layers, self.n_heads,
                self.n_kv_heads, self.ffn_dim, self.max_seq_len) <= 0:
             raise ValueError("Vocabulary and model dimensions must be positive")
@@ -279,15 +286,25 @@ class Transformer(nn.Module):
         self.register_buffer("rope_sine", angles.sin(), persistent=False)
 
         # Use the embedding matrix again for output scores (weight tying).
-        # With Qwen's ~151k tokens and width 512, a second matrix would add
-        # roughly 78 million parameters without changing the output shape.
+        # With our 32,768-token BPE and width 512, a separate output matrix
+        # would add 16.78 million parameters without changing the output shape.
         self.apply(self._init_weights)
 
-    @staticmethod
-    def _init_weights(module: nn.Module) -> None:
-        """Initialize learned matrices near zero; leave RMSNorm scales at one."""
+    def _init_weights(self, module: nn.Module) -> None:
+        """Use the normal rule from HF Llama's SwiGLU transformer implementation.
+
+        LlamaConfig.initializer_range defaults to 0.02; PreTrainedModel initializes
+        linear and embedding weights with normal_(0,std). This is a documented
+        implementation choice, not a universal SwiGLU-specific variance formula.
+        RMSNorm keeps its unit scales. Tied vocabulary output shares the existing
+        embedding, so it is not initialized a second time. No ReLU gain or extra
+        depth-dependent residual scaling is applied.
+
+        Reference: transformers v4.57.1, models/llama/configuration_llama.py and
+        modeling_utils.py::PreTrainedModel._init_weights.
+        """
         if isinstance(module, (nn.Linear, nn.Embedding)):
-            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
 
     def forward(
         self,

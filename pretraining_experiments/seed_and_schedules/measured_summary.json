@@ -1,0 +1,96 @@
+{
+  "suite": "day07-full-2a6757d322c4",
+  "comparison_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/ap7dswze",
+  "metrics": {
+    "val/sql_loss": {
+      "cosine_seeds": {
+        "1": 0.7968160510063171,
+        "2": 0.8120633959770203,
+        "3": 0.8076513409614563
+      },
+      "n": 3,
+      "mean": 0.8055102626482645,
+      "sample_std": 0.007845925338755234,
+      "screening_threshold_2std": 0.015691850677510468,
+      "paired_seed_1_improvement": {
+        "linear": 0.12900489568710327,
+        "cosine": 0.1334494948387146
+      }
+    },
+    "val/english_loss": {
+      "cosine_seeds": {
+        "1": 4.708972454071045,
+        "2": 4.753371715545654,
+        "3": 4.713550090789795
+      },
+      "n": 3,
+      "mean": 4.725298086802165,
+      "sample_std": 0.0244199746642513,
+      "screening_threshold_2std": 0.0488399493285026,
+      "paired_seed_1_improvement": {
+        "linear": 0.30524682998657227,
+        "cosine": 0.3022885322570801
+      }
+    }
+  },
+  "dataset_identity": {
+    "manifest_sha256": "914bb1a0fe4adfc52f474a5f4dccea636b16242ffdc0b2cfa14a02adab54501d",
+    "corpus_id": "ff43d7752a904b649fad5b2d2dbb4df3",
+    "sql_dir": "/vol/bpe_tokenization/pretrain_data",
+    "tokenizer_sha256": "05b8bb66ea18f8328e785424de06fd6653c9147a7dbe686a4dd1627e224e85a1",
+    "vocab_size": 32768,
+    "token_counts": {
+      "english_train": 9238968483,
+      "english_val": 1026673344,
+      "sql_train": 7830836989,
+      "sql_val": 610246589
+    }
+  },
+  "controlled_settings": {
+    "mode": "masked_pack",
+    "sql_fraction": 0.5,
+    "micro_batch_size": 8,
+    "grad_accum_steps": 4,
+    "seq_len": 4096,
+    "max_steps": 1000,
+    "warmup_steps": 100,
+    "eval_every": 50,
+    "val_batches": 128,
+    "loss_chunk_size": 128,
+    "peak_lr": 0.0006,
+    "min_lr": 6e-05,
+    "weight_decay": 0.1,
+    "grad_clip": 1.0,
+    "initializer_range": 0.02,
+    "validation_seed": 12345,
+    "wsd_stable_frac": 0.7,
+    "wsd_decay_frac": 0.2
+  },
+  "runs": [
+    {
+      "name": "cosine-seed-1",
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/822ec9a7a3db46d29f5ba7ae5152746e",
+      "non_pad_tokens": 131072000
+    },
+    {
+      "name": "cosine-seed-2",
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/d2de060b9c16451189ff44c2bd662fed",
+      "non_pad_tokens": 131072000
+    },
+    {
+      "name": "cosine-seed-3",
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/ae53e35464c94f38bed3c3b933277621",
+      "non_pad_tokens": 131072000
+    },
+    {
+      "name": "wsd-cosine-seed-1",
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/6888a42b4d914085abfaf9fef0439e8e",
+      "non_pad_tokens": 131072000
+    },
+    {
+      "name": "wsd-linear-seed-1",
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/9d013a624ebf457d9b54feb62540e7f0",
+      "non_pad_tokens": 131072000
+    }
+  ]
+}

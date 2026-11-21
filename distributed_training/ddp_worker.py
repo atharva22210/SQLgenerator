@@ -30,7 +30,7 @@ from distributed_training.fsdp_checkpointing import export_profile, prepare_mode
 from distributed_training.ddp_core import accumulated_backward, batch_rng, microbatch_ids
 from model.transformer_35m import Transformer, TransformerConfig
 from data.grouped_corpus import resolve_grouped_sql
-from training_common import DATA_DIR, TrainConfig, learning_rate, volume
+from training.config import DATA_DIR, TrainConfig, learning_rate, volume
 from distributed_training.sql_validation import load_training_and_sql_validation, evaluate_sql
 
 
@@ -124,9 +124,12 @@ def run(settings: dict) -> None:
         # global microbatch ID, rather than perturbing model initialization.
         torch.manual_seed(config.seed)
         torch.cuda.manual_seed_all(config.seed)
+        # TrainConfig is the source of initialization settings for every rank;
+        # model overrides below describe architecture, not a second init choice.
+        model_settings = {**settings['model'], 'initializer_range': config.initializer_range}
         raw_model = Transformer(TransformerConfig(vocab_size=identity['vocab_size'],
                                                  max_seq_len=config.seq_len,
-                                                 **settings['model']))
+                                                 **model_settings))
         parameter_count = sum(p.numel() for p in raw_model.parameters())
         # Classify by the original shape before FSDP replaces it with a shard.
         decay = [p for p in raw_model.parameters() if p.ndim >= 2]
