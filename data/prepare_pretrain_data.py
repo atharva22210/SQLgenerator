@@ -34,8 +34,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # accidentally writing large generated datasets into the container image.
 VOLUME_NAME = "sqlgen-data"
 VOLUME_MOUNT = Path("/vol")
-TOKENIZER_PATH = VOLUME_MOUNT / "tokenizer"
-OUTPUT_PATH = VOLUME_MOUNT / "pretrain_data"
+QWEN_BUILD = VOLUME_MOUNT / "qwen_tokenization"
+TOKENIZER_PATH = QWEN_BUILD / "tokenizer"
+OUTPUT_PATH = QWEN_BUILD / "pretrain_data"
 
 ENGLISH_DATASET = "HuggingFaceFW/fineweb-edu"
 ENGLISH_CONFIG = "sample-10BT"
@@ -176,8 +177,8 @@ def load_stream(dataset: str, *, config: str | None = None, revision: str):
 def find_tokenizer_path() -> Path:
     """Find the saved tokenizer while rejecting unrelated config files.
 
-    The intended Volume layout is ``/vol/tokenizer/<tokenizer files>``. An
-    earlier upload can accidentally create ``/vol/tokenizer/tokenizer`` when
+    The intended Volume layout is ``/vol/qwen_tokenization/tokenizer/<tokenizer files>``. An
+    earlier upload can accidentally create ``/vol/qwen_tokenization/tokenizer/tokenizer`` when
     the remote destination ends with ``/``. Checking for tokenizer-specific
     files lets us handle either layout and avoids passing a stale outer
     ``config.json`` to ``AutoTokenizer``.

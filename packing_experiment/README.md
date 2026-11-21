@@ -37,8 +37,8 @@ it is a sampling-policy change, not a claim that random crops always train
 worse. Use fresh run names when comparing with the previous random-crop
 trainer. Default names include `prefix` to avoid resuming the old defaults.
 
-All runs read `uint32` tokens from `/vol/pretrain_data/` on the `sqlgen-data`
-Volume and use the tokenizer saved under `/vol/tokenizer/`. The trainer requires
+All runs read `uint32` tokens from `/vol/bpe_tokenization/pretrain_data/` on the `sqlgen-data`
+Volume and use the tokenizer saved under `/vol/bpe_tokenization/tokenizer/`. The trainer requires
 the corpus `metadata.json` and all four train and four validation bin files.
 It never retokenizes or downloads the original Hugging Face datasets.
 

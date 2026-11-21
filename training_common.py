@@ -11,7 +11,7 @@ import modal
 ROOT = Path(__file__).resolve().parent
 VOLUME_NAME = "sqlgen-data"
 # Pin both layouts together: raw Qwen IDs cannot index a 32K embedding.
-TRAINING_BUILD = Path("/vol/byte_bpe/d6d855035d224fb891f1175bef7c59af")
+TRAINING_BUILD = Path("/vol/bpe_tokenization")
 DATA_DIR = TRAINING_BUILD / "pretrain_data"
 TOKENIZER_DIR = TRAINING_BUILD / "tokenizer"
 

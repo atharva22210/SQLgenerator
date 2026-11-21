@@ -21,8 +21,8 @@ from data.grouped_corpus import resolve_grouped_sql
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = Path("/vol/pretrain_data")
-TOKENIZER_DIR = Path("/vol/tokenizer")
+DATA_DIR = Path("/vol/qwen_tokenization/pretrain_data")
+TOKENIZER_DIR = Path("/vol/qwen_tokenization/tokenizer")
 SOURCES = ("english", "sql")
 
 app = modal.App("sqlgen-inspect-pretrain-data")
