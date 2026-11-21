@@ -17,7 +17,7 @@ class PretrainSubmissionTests(unittest.TestCase):
         config, entity, project, name = spawn.call_args.args
         self.assertEqual(entity, "test-team")
         self.assertEqual((config["micro_batch_size"], config["grad_accum_steps"],
-                          config["seq_len"], config["loss_chunk_size"]), (4, 2, 2048, 128))
+                          config["seq_len"], config["loss_chunk_size"]), (4, 2, 4096, 128))
         self.assertEqual(config, vars(TrainConfig()))
         self.assertIn("prefix", name)
 
