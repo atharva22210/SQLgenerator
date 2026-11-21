@@ -3,7 +3,11 @@
 A learning project for training an autoregressive text-to-MySQL model from
 scratch, with an emphasis on pre-training and distributed execution. The first
 tokenizer and pretraining corpus are documented in the data preparation code.
-For the single-GPU batching comparison, see [Day 5 pretraining](docs/day5-pretraining.md).
+
+## Training experiments
+
+- [Sequence packing](packing_experiment/README.md) compares padding, unmasked packing, and masked packing on one GPU. [Packing takeaways](packing_experiment/takeaways.md)
+- [Distributed training](distributed_training/README.md) covers DDP correctness and gradient synchronization. [Memory and sharding](distributed_training/memory-and-sharding.md) covers DDP, FSDP, and activation checkpointing on two GPUs. [Distributed training takeaways](distributed_training/takeaways.md)
 
 ## Setup
 
@@ -423,18 +427,17 @@ is reported as an error rather than silently switching to offline logging.
 
 ## Pre-training data preparation
 
-`data/prepare_pretrain_data.py` uses the locked CPU environment (Python
-3.13.15, datasets 4.8.5, transformers 4.57.6, tokenizers 0.22.2), omitting the
-`model` group remotely. It streams FineWeb-Edu `sample-10BT` and three SQL
-sources into the existing eight uint32 `.bin` files under
-`/vol/pretrain_data/`. Original row order, every-tenth-row validation, skipped
-empty SQL examples, and one EOS per included document are preserved. It does
-not truncate long documents; training will need to pack tokens into windows.
+`data/prepare_pretrain_data.py` prepares the FineWeb-Edu `sample-10BT`
+English files on the Modal volume. Use the [Grouped SQL preparation
+job](distributed_training/README.md#grouped-sql-corpus) for SQL. Both training experiments
+require a completed Grouped SQL build under `/vol/pretrain_data/grouped_sql/`.
+The newest compatible completed build is selected by default.
 
-The optimized pipeline changes execution rather than the corpus:
+The English preparation job uses the locked CPU environment (Python 3.13.15,
+datasets 4.8.5, transformers 4.57.6, tokenizers 0.22.2) and preserves source
+order, every-tenth-row validation, and an EOS after every document.
 
-- Read each source once and write training and validation together. This
-  removes the second full source scan, not half the tokenization work.
+- Stream English once and write training and validation together.
 - Tokenize batches of at most 256 source rows or approximately one million
   formatted characters with the fast tokenizer. The Modal image sets
   `TOKENIZERS_PARALLELISM=true` and `RAYON_NUM_THREADS=8` before Rust initializes,
@@ -546,7 +549,7 @@ device to `wrap_model(model, device, "ddp")`. Dataset sharding, optimizer
 configuration, checkpoint policy, and training loop are intentionally left to
 the training application.
 
-The runnable Day 6 application now implements those policies for the Part A
+The distributed training launcher implements those policies for the Part A
 DDP correctness and Part B `no_sync()` experiments. See
-[the commented code and execution guide](docs/day6-ddp-parts-ab.md), starting
-with its small GPU checks before the curriculum-size suites.
+[the commented code and execution guide](distributed_training/README.md), starting
+with its small GPU checks before the full experiment suites.

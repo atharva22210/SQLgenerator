@@ -63,10 +63,11 @@ def accumulated_backward(model, batches, device, *, world_size: int, no_sync: bo
                          loss_chunk_size: int, bf16: bool = True):
     """Accumulate a GLOBAL token-mean gradient; leave clipping/step to caller.
 
-    model: Plain model for world_size=1, otherwise a DDP wrapper.
+    model: Plain model for world_size=1, otherwise a DDP or FSDP wrapper.
     batches: CPU Batch objects for this update, with valid target counts.
     device: This process's torch.device.
     no_sync: Skip DDP gradient communication except on the last microbatch.
+        Part C keeps this off for FSDP to retain sharded gradients between passes.
     loss_chunk_size: Positions projected into vocabulary logits at once.
     bf16: CUDA autocast for production; False uses FP32 in CPU tests.
 
@@ -83,7 +84,7 @@ def accumulated_backward(model, batches, device, *, world_size: int, no_sync: bo
 
     Each forward returns a LOCAL mean loss L_i over n_i valid targets.
     We backpropagate L_i * n_i * world_size / global_target_count. DDP
-    averages gradients by world_size, canceling that factor. The result is
+    and FSDP average gradients by world_size, canceling that factor. The result is
     sum(all token gradients) / global_target_count, even for unequal lengths.
     There is NO additional division by accumulation steps or GPU count.
     """
@@ -118,7 +119,7 @@ def accumulated_backward(model, batches, device, *, world_size: int, no_sync: bo
             with torch.autocast(device.type, dtype=torch.bfloat16, enabled=bf16):
                 _, loss = model(**batch.model_inputs(batch.mode, device),
                                 loss_chunk_size=loss_chunk_size)
-            # If L_i = S_i/n_i, backward sees S_i*G/N. DDP then divides the
+            # If L_i = S_i/n_i, backward sees S_i*G/N. the wrapper divides the
             # summed rank gradients by G, leaving grad(sum(S_i))/N. This also
             # handles unequal numbers of PAD/masked targets in different ranks.
             (loss * (batch.predicted_tokens * world_size / counts[0])).backward()

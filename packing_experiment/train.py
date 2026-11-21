@@ -7,7 +7,7 @@ W&B records the metrics. Training starts only when you run the command.
 Example (small correctness run before a longer comparison)::
 
     uv run --locked modal run --detach --env main --profile sanika-05 \
-        train_pretrain.py --mode pad --max-steps 2 --warmup-steps 1 \
+        -m packing_experiment.train --mode pad --max-steps 2 --warmup-steps 1 \
         --wandb-entity YOUR_WANDB_ENTITY
 
 Defaults target one A10: 4 x 2048 tokens per microbatch, two accumulation
@@ -18,9 +18,8 @@ Measure peak memory and throughput in a short correctness run first.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 import json
-import math
 import os
 from pathlib import Path
 import random
@@ -30,184 +29,13 @@ import uuid
 import modal
 
 
-ROOT = Path(__file__).resolve().parent
-VOLUME_NAME = "sqlgen-data"
-DATA_DIR = Path("/vol/pretrain_data")
-CHECKPOINT_DIR = Path("/vol/checkpoints/day5")
-TOKENIZER_DIR = Path("/vol/tokenizer")
-
-app = modal.App("sqlgen-day5-pretrain")
-volume = modal.Volume.from_name(VOLUME_NAME)
-wandb_secret = modal.Secret.from_name("wandb-secret", required_keys=["WANDB_API_KEY"])
-image = (
-    modal.Image.debian_slim(python_version="3.13.15")
-    .uv_sync(
-        str(ROOT), extra_options="--locked", uv_version="0.13.7", frozen=False,
-        env={"UV_DEFAULT_INDEX": "https://pypi.org/simple", "UV_INDEX_URL": "https://pypi.org/simple"},
-    )
-    # uv_sync installs dependencies; the project itself is not installed as a
-    # wheel. Copy the teaching modules separately for remote imports.
-    .add_local_dir(ROOT / "model", "/root/model")
-    .add_local_dir(ROOT / "data", "/root/data")
-)
+from training_common import DATA_DIR, TrainConfig, _load_data_and_tokenizer, image, learning_rate, volume, wandb_secret
 
 
-@dataclass(frozen=True)
-class TrainConfig:
-    """Values that should stay fixed while comparing the three batch modes.
-
-    Args:
-        mode: One of pad, naive_pack, masked_pack.
-        sql_fraction: Probability a sampled training document comes from SQL.
-            The observed SQL *token* fraction is logged separately.
-        micro_batch_size: Rows sent to the GPU per forward/backward pass.
-        grad_accum_steps: Number of microbatches contributing to one update.
-        seq_len: Token slots per row; it must fit model.max_seq_len.
-        max_steps: Number of optimizer updates, not microbatches.
-        warmup_steps: Updates with linearly rising learning rate.
-        lr_schedule: Decay after warmup: cosine or inverse_sqrt. Both use
-            bf16 mixed precision and the same model, data, and optimizer.
-        eval_every: Updates between standalone-document validation passes.
-        val_batches: Fixed number of batches per validation corpus.
-        seed: Shared initial model and data sampling seed across modes.
-        loss_chunk_size: Output positions projected at once to limit VRAM.
-    """
-
-    mode: str = "pad"
-    sql_fraction: float = 0.5
-    micro_batch_size: int = 4
-    grad_accum_steps: int = 2
-    seq_len: int = 2048
-    max_steps: int = 500
-    warmup_steps: int = 50
-    lr_schedule: str = "cosine"
-    eval_every: int = 50
-    val_batches: int = 8
-    seed: int = 42
-    loss_chunk_size: int = 128
-    peak_lr: float = 6e-4
-    min_lr: float = 6e-5
-    weight_decay: float = 0.1
-    grad_clip: float = 1.0
-
-    def __post_init__(self) -> None:
-        if self.mode not in {"pad", "naive_pack", "masked_pack"}:
-            raise ValueError("mode must be pad, naive_pack, or masked_pack")
-        if self.lr_schedule not in {"cosine", "inverse_sqrt"}:
-            raise ValueError("lr_schedule must be cosine or inverse_sqrt")
-        if not 0 <= self.sql_fraction <= 1:
-            raise ValueError("sql_fraction must be between 0 and 1")
-        if min(self.micro_batch_size, self.grad_accum_steps, self.seq_len,
-               self.max_steps, self.eval_every, self.val_batches,
-               self.loss_chunk_size) <= 0 or self.seq_len < 2:
-            raise ValueError("Batch sizes, lengths, and step counts must be positive")
-        if not 0 <= self.warmup_steps <= self.max_steps:
-            raise ValueError("warmup_steps must be between 0 and max_steps")
-        if not 0 < self.min_lr <= self.peak_lr or self.weight_decay < 0 or self.grad_clip <= 0:
-            raise ValueError("Learning rates, weight decay, or gradient clip are invalid")
-
-
-def learning_rate(update: int, config: TrainConfig) -> float:
-    """Return the LR for one-based optimizer update ``update``.
-
-    Warmup reaches peak_lr on update ``warmup_steps``. With no warmup, update
-    1 starts at peak_lr. Cosine reaches min_lr at max_steps and flattens at
-    both ends; inverse_sqrt decays as 1/sqrt(update) and may not reach min_lr
-    by max_steps. The floor prevents its LR from falling below min_lr later.
-    """
-    if not 1 <= update <= config.max_steps:
-        raise ValueError("update must be within the training run")
-    if update <= config.warmup_steps and config.warmup_steps:
-        return config.peak_lr * update / config.warmup_steps
-    if config.lr_schedule == "inverse_sqrt":
-        # Anchor at the end of warmup: step 50 has peak_lr, while step 200
-        # has peak_lr * sqrt(50 / 200) = half the peak. With no warmup,
-        # anchor at step 1 so the first update uses peak_lr.
-        anchor = max(1, config.warmup_steps)
-        return max(config.min_lr, config.peak_lr * math.sqrt(anchor / update))
-    # With zero warmup, step 1 itself is the cosine peak. Otherwise the
-    # warmup's last step is the peak and the cosine begins on the next step.
-    decay_start = max(1, config.warmup_steps)
-    decay_steps = config.max_steps - decay_start
-    if decay_steps == 0:
-        return config.peak_lr
-    progress = (update - decay_start) / decay_steps
-    return config.min_lr + 0.5 * (config.peak_lr - config.min_lr) * (1 + math.cos(math.pi * progress))
-
-
-def _tokenizer_path() -> Path:
-    """Accept either Volume layout caused by earlier tokenizer uploads."""
-    for path in (TOKENIZER_DIR, TOKENIZER_DIR / "tokenizer"):
-        if (path / "tokenizer.json").is_file() and (path / "tokenizer_config.json").is_file():
-            return path
-    raise FileNotFoundError(f"Tokenizer files missing under {TOKENIZER_DIR}")
-
-
-def _load_data_and_tokenizer():
-    """Require the completion metadata before trusting raw binary files."""
-    from transformers import AutoTokenizer
-    from data.dataloader import Corpus
-
-    volume.reload()
-    metadata_path = DATA_DIR / "metadata.json"
-    if not metadata_path.is_file():
-        raise FileNotFoundError(f"No completed corpus metadata at {metadata_path}")
-    metadata = json.loads(metadata_path.read_text())
-    if metadata.get("token_dtype") != "uint32":
-        raise ValueError("Expected uint32 token files from the preparation job")
-    tokenizer = AutoTokenizer.from_pretrained(_tokenizer_path(), local_files_only=True)
-    if len(tokenizer) != metadata["tokenizer_vocab_size"]:
-        raise ValueError("Saved tokenizer vocabulary disagrees with corpus metadata")
-    if tokenizer.eos_token_id != metadata["eos_token_id"] or tokenizer.pad_token_id is None:
-        raise ValueError("Saved tokenizer needs matching EOS and a PAD token")
-    _validate_corpus_files(DATA_DIR, metadata)
-    train = Corpus(DATA_DIR, "train", tokenizer.eos_token_id)
-    validation = Corpus(DATA_DIR, "val", tokenizer.eos_token_id)
-    from data.sql_overlap import filter_validation
-    filter_validation(train, validation, tokenizer)
-    return tokenizer, train, validation
-
-
-def _validate_corpus_files(directory: Path, metadata: dict) -> None:
-    """Check durable file lengths and current preparation completion markers.
-
-    Pipeline v2 checkpoints both splits in one source marker. Its migration
-    deliberately leaves legacy split markers unchanged, so a completed v2
-    source can coexist with an old incomplete split snapshot. Prefer the
-    current source marker, checking its identity and both token counts; use
-    legacy markers only when the source marker does not exist.
-    """
-    from data.dataloader import SQL_SOURCES
-
-    for name in ("english", *SQL_SOURCES):
-        source_path = directory / f"{name}.checkpoint.json"
-        source = json.loads(source_path.read_text()) if source_path.is_file() else None
-        if source is not None:
-            expected = {"pipeline_version": metadata.get("pipeline_version"),
-                        "dtype": metadata["token_dtype"],
-                        "vocab_size": metadata["tokenizer_vocab_size"],
-                        "tokenizer_sha256": metadata.get("tokenizer_sha256"),
-                        "revision": metadata.get("dataset_revisions", {}).get(name)}
-            if any(source.get(key) != value for key, value in expected.items()):
-                raise ValueError(f"{source_path} disagrees with corpus metadata")
-        for split in ("train", "val"):
-            key = f"{name}_{split}"
-            path = directory / f"{key}.bin"
-            expected_tokens = metadata["token_counts"][key]
-            expected_bytes = expected_tokens * 4
-            if not path.is_file() or path.stat().st_size != expected_bytes:
-                raise ValueError(f"{path} does not match completed metadata ({expected_bytes} bytes)")
-            legacy_path = directory / f"{key}.bin.checkpoint.json"
-            progress = None
-            if source is not None:
-                progress = source["splits"][split]
-            elif legacy_path.is_file():
-                progress = json.loads(legacy_path.read_text())
-            if progress is not None:
-                if not progress["complete"]:
-                    raise ValueError(f"{path} still has an unfinished preparation checkpoint")
-                if progress["tokens_written"] != expected_tokens:
-                    raise ValueError(f"{path} checkpoint token count disagrees with corpus metadata")
+CHECKPOINT_DIR = Path("/vol/checkpoints/packing")
+WANDB_PROJECT = "sqlgen-packing"
+MODE_TITLES = {"pad": "Padding", "naive_pack": "Unmasked packing", "masked_pack": "Masked packing"}
+app = modal.App("sqlgen-packing")
 
 
 def _evaluate(model, corpus, config: TrainConfig, pad_id: int, device) -> dict[str, float]:
@@ -252,14 +80,15 @@ def _checkpoint_path(run_name: str) -> Path:
 
 
 def _save_checkpoint(path: Path, model, optimizer, config: TrainConfig, update: int,
-                     rng: random.Random, cumulative_tokens: int, wandb_id: str) -> None:
+                     rng: random.Random, cumulative_tokens: int, wandb_id: str,
+                     grouped_sql_dir: Path) -> None:
     """Write then rename and commit, so resume never reads a partial snapshot."""
     import torch
 
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     torch.save({
-        "config": asdict(config), "update": update,
+        "config": asdict(config), "update": update, "grouped_sql_dir": str(grouped_sql_dir),
         "model": model.state_dict(), "optimizer": optimizer.state_dict(),
         "python_rng": rng.getstate(), "torch_rng": torch.get_rng_state(),
         "cuda_rng": torch.cuda.get_rng_state(),
@@ -282,7 +111,19 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
     # GradScaler. Autocast changes eligible compute ops, not parameter dtype.
     if not wandb_entity:
         raise ValueError("Pass --wandb-entity to record a reproducible run")
-    tokenizer, train, validation = _load_data_and_tokenizer()
+    from data.grouped_corpus import resolve_grouped_sql
+
+    volume.reload()
+    path = _checkpoint_path(run_name)
+    state = torch.load(path, map_location="cpu", weights_only=False) if path.is_file() else None
+    if state is not None:
+        if state["config"] != asdict(config):
+            raise ValueError(f"Checkpoint config differs from this run: {path}")
+        if not state.get("grouped_sql_dir"):
+            raise ValueError(f"Checkpoint predates Grouped SQL. Use a new run name: {path}")
+    saved_dir = Path(state["grouped_sql_dir"]) if state is not None else None
+    grouped_sql_dir, _ = resolve_grouped_sql(DATA_DIR, saved_dir)
+    tokenizer, train, validation = _load_data_and_tokenizer(grouped_sql_dir, reload_volume=False)
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
     rng = random.Random(config.seed)
@@ -299,16 +140,11 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
          {"params": no_decay, "weight_decay": 0.0}],
         lr=config.peak_lr, betas=(0.9, 0.95), eps=1e-8, fused=True,
     )
-    path = _checkpoint_path(run_name)
     # Own the stable ID used by W&B and our checkpoint without depending on
     # W&B's internal ID helper, which is not exposed by the pinned release.
     start_update, cumulative_tokens, wandb_id = 0, 0, uuid.uuid4().hex
-    if path.is_file():
-        # Resume only the same experiment. A different mix or layout needs a
-        # new run name, otherwise its optimizer history would contaminate it.
-        state = torch.load(path, map_location=device, weights_only=False)
-        if state["config"] != asdict(config):
-            raise ValueError(f"Checkpoint config differs from this run: {path}")
+    if state is not None:
+        # Restore the same corpus and stream position the checkpoint recorded.
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         # Loading restores param-group flags too. Older snapshots used the
@@ -325,14 +161,22 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
     print(json.dumps({"run": run_name, "parameter_count": parameter_count,
                       "gpu": torch.cuda.get_device_name(), "resume_after_update": start_update,
                       "compute_dtype": "bfloat16", "parameter_dtype": "float32",
-                      "data_dir": str(DATA_DIR), "checkpoint": str(path)}), flush=True)
+                      "data_dir": str(DATA_DIR), "grouped_sql_dir": str(grouped_sql_dir), "checkpoint": str(path)}), flush=True)
     with wandb.init(
-        entity=wandb_entity, project=wandb_project, name=run_name,
+        entity=wandb_entity, project=wandb_project,
+        name=f"Packing · {MODE_TITLES[config.mode]} · {config.lr_schedule} · seed {config.seed}",
+        group=f"Packing · Grouped SQL {grouped_sql_dir.name[:8]} · {config.seq_len:,} tokens",
+        job_type="training",
         id=wandb_id, resume="allow", config={**asdict(config), "parameter_count": parameter_count,
+                                              "grouped_sql_dir": str(grouped_sql_dir),
+                                              "corpus_id": grouped_sql_dir.name, "checkpoint_name": run_name,
                                               "gpu": torch.cuda.get_device_name(),
                                               "compute_dtype": "bfloat16", "parameter_dtype": "float32"},
         settings=wandb.Settings(init_timeout=120),
     ) as run:
+        run.define_metric("optimizer_update")
+        for namespace in ("train", "val", "data", "perf"):
+            run.define_metric(f"{namespace}/*", step_metric="optimizer_update")
         torch.cuda.reset_peak_memory_stats()
         for update in range(start_update + 1, config.max_steps + 1):
             started = time.perf_counter()
@@ -385,11 +229,12 @@ def _run(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: s
             if update % config.eval_every == 0 or update == config.max_steps:
                 metrics.update(_evaluate(model, validation, config, tokenizer.pad_token_id, device))
                 _save_checkpoint(path, model, optimizer, config, update,
-                                 rng, cumulative_tokens, wandb_id)
-            run.log(metrics, step=update)
+                                 rng, cumulative_tokens, wandb_id, grouped_sql_dir)
+            run.log({"optimizer_update": update, **metrics}, step=update)
             print(json.dumps({"update": update, **metrics}), flush=True)
         return {"run": run_name, "updates": config.max_steps,
-                "parameter_count": parameter_count, "checkpoint": str(path), "wandb_url": run.url}
+                "parameter_count": parameter_count, "checkpoint": str(path), "wandb_url": run.url,
+                "grouped_sql_dir": str(grouped_sql_dir)}
 
 
 @app.function(
@@ -409,7 +254,7 @@ def main(
     max_steps: int = 500, warmup_steps: int = 50, lr_schedule: str = "cosine",
     eval_every: int = 50,
     val_batches: int = 8, seed: int = 42, loss_chunk_size: int = 128,
-    wandb_entity: str = "", wandb_project: str = "sqlgen-day5",
+    wandb_entity: str = "", wandb_project: str = WANDB_PROJECT,
     run_name: str = "", wait: bool = False,
 ) -> None:
     """Submit and exit by default; use modal run --detach to keep the App alive.

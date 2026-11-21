@@ -1,4 +1,4 @@
-"""Sample training batches from the eight uint32 files on the Modal Volume.
+"""Sample training batches from the uint32 files on the Modal Volume.
 
 The preparation job wrote each document as token IDs followed by EOS. The
 files contain no row table, so this loader finds EOS positions once at startup
@@ -127,11 +127,13 @@ class DocumentFile:
 class Corpus:
     """Keep English and SQL files separate so their sampling mix is explicit."""
 
-    def __init__(self, directory: Path, split: str, eos_id: int) -> None:
+    def __init__(self, directory: Path, split: str, eos_id: int, *,
+                 grouped_sql_dir: Path, include_english: bool = True) -> None:
         if split not in {"train", "val"}:
             raise ValueError("split must be train or val")
-        self.english = DocumentFile(directory / f"english_{split}.bin", eos_id)
-        self.sql = [DocumentFile(directory / f"{name}_{split}.bin", eos_id) for name in SQL_SOURCES]
+        if include_english:
+            self.english = DocumentFile(directory / f"english_{split}.bin", eos_id)
+        self.sql = [DocumentFile(grouped_sql_dir / f"sql_{split}.bin", eos_id)]
         self.sql_weights = [source.token_count for source in self.sql]
 
     def sample(self, kind: str, rng: random.Random, length: int, *, first_slice: bool = True) -> list[int]:

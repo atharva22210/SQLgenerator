@@ -17,11 +17,13 @@ from pathlib import Path
 
 import modal
 
+from data.grouped_corpus import resolve_grouped_sql
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = Path("/vol/pretrain_data")
 TOKENIZER_DIR = Path("/vol/tokenizer")
-SOURCES = ("english", "nstext2sql", "sql_context", "text_to_sql_v1")
+SOURCES = ("english", "sql")
 
 app = modal.App("sqlgen-inspect-pretrain-data")
 volume = modal.Volume.from_name("sqlgen-data")
@@ -31,6 +33,7 @@ image = (
     modal.Image.debian_slim(python_version="3.13.15")
     .pip_install("numpy==2.5.4", "transformers==4.57.6")
     .add_local_file(ROOT / "data" / "inspect_pretrain_data.py", "/root/inspect_pretrain_data.py")
+    .add_local_file(ROOT / "data" / "grouped_corpus.py", "/root/data/grouped_corpus.py")
 )
 
 
@@ -56,8 +59,8 @@ def _question_and_sql(source: str, decoded: str) -> tuple[str | None, str | None
     """Extract the source question and reference SQL from a decoded row.
 
     This is an inspection aid, not a model prediction. SQL sources were saved
-    as prompt + ``<sql>`` + answer + ``</sql>``. For NSText2SQL the question is
-    the last ``--`` comment in its prompt; the other sources use ``Question:``.
+    as prompt + ``<sql>`` + answer + ``</sql>`` for SynSQL. Repository files
+    contain SQL text without the question and answer wrapper.
     If an exceptionally long row was only partly decoded, a missing field is
     shown as null rather than guessing its contents.
     """
@@ -70,15 +73,8 @@ def _question_and_sql(source: str, decoded: str) -> tuple[str | None, str | None
     if not closing_marker:
         return None, None
 
-    if source == "nstext2sql":
-        # The last SQL-comment line contains the user's natural-language
-        # request; an earlier comment may instead describe the SQL dialect.
-        comments = [line.strip()[2:].strip() for line in prompt.splitlines()
-                    if line.lstrip().startswith("--")]
-        question = comments[-1] if comments else None
-    else:
-        _, question_marker, question_text = prompt.rpartition("Question:\n")
-        question = question_text.strip() if question_marker else None
+    _, question_marker, question_text = prompt.rpartition("Question:\n")
+    question = question_text.strip() if question_marker else None
     return question, answer.strip()
 
 
@@ -114,11 +110,16 @@ def inspect(split: str, samples_per_source: int, max_chars: int) -> dict:
     if eos_id != metadata["eos_token_id"] or len(tokenizer) != metadata["tokenizer_vocab_size"]:
         raise ValueError("The saved tokenizer does not match the token files")
 
+    grouped_sql_dir, grouped = resolve_grouped_sql(DATA_DIR)
+    if eos_id != grouped["eos_token_id"] or len(tokenizer) != grouped["tokenizer_vocab_size"]:
+        raise ValueError("The tokenizer does not match the Grouped SQL files")
+
     examples = {}
     for source in SOURCES:
         key = f"{source}_{split}"
-        path = DATA_DIR / f"{key}.bin"
-        expected_bytes = metadata["token_counts"][key] * 4
+        directory, source_metadata = (DATA_DIR, metadata) if source == "english" else (grouped_sql_dir, grouped)
+        path = directory / f"{key}.bin"
+        expected_bytes = source_metadata["token_counts"][key] * 4
         if not path.is_file() or path.stat().st_size != expected_bytes:
             raise ValueError(f"{path} is missing or differs from completion metadata")
         tokens = np.memmap(path, mode="r", dtype="<u4")
@@ -176,7 +177,7 @@ def inspect(split: str, samples_per_source: int, max_chars: int) -> dict:
             start = end + 1
         examples[source] = rows
 
-    result = {"split": split, "tokenizer": str(_tokenizer_path()), "examples": examples}
+    result = {"split": split, "tokenizer": str(_tokenizer_path()), "grouped_sql_dir": str(grouped_sql_dir), "examples": examples}
     # Print inside the Modal function so the decoded examples appear in its
     # Logs tab, including when the local terminal is no longer available.
     print(json.dumps(result, indent=2, ensure_ascii=False), flush=True)

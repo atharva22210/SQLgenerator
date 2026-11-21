@@ -1,4 +1,17 @@
-# Day 5: one-GPU batching experiment
+# Sequence packing on one GPU
+
+Use [train.py](train.py) to run the packing comparison and [check.py](check.py)
+for the bounded CUDA correctness check. The W&B project is `sqlgen-packing`.
+Run names spell out the packing method, learning-rate schedule, and seed.
+See [Experiment takeaways](takeaways.md) for the comparison and its evidence.
+
+Packing runs use FineWeb-Edu for English and the latest completed
+[Grouped SQL build](../distributed_training/README.md#grouped-sql-corpus) for SQL training
+and validation. Resuming a Grouped SQL checkpoint keeps its original build.
+Checkpoints from the earlier SQL sources require a new run name. New runs
+use `/vol/checkpoints/packing`. Earlier snapshots and W&B runs are still
+available at their original locations.
+
 
 The question is how much padding costs, and whether isolating packed documents
 changes validation loss. The baseline is `pad`: one document per row, with
@@ -43,15 +56,15 @@ are finite. It creates a unique run name and has a 15-minute function timeout:
 
 ```bash
 uv run --locked modal run --detach --env main --profile sanika-05 \
-  modal_pretrain_check.py::main --wandb-entity dkbsingh7-iit-delhi
+  -m packing_experiment.check::main --wandb-entity dkbsingh7-iit-delhi
 ```
 
 To run just the ordinary trainer for two updates instead:
 
 ```bash
 uv run --locked modal run --detach --env main --profile sanika-05 \
-  train_pretrain.py --mode pad --max-steps 2 --warmup-steps 1 \
-  --eval-every 1 --val-batches 2 --run-name day5-prefix-pad-check \
+  -m packing_experiment.train --mode pad --max-steps 2 --warmup-steps 1 \
+  --eval-every 1 --val-batches 2 --run-name packing-pad-check \
   --wandb-entity dkbsingh7-iit-delhi
 ```
 
@@ -76,17 +89,17 @@ sequence length, batch size, learning-rate schedule, and evaluation settings.
 The default schedule is `cosine`:
 
 ```bash
-uv run --locked modal run --detach --env main --profile sanika-05 train_pretrain.py --mode pad --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
-uv run --locked modal run --detach --env main --profile sanika-05 train_pretrain.py --mode naive_pack --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
-uv run --locked modal run --detach --env main --profile sanika-05 train_pretrain.py --mode masked_pack --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
+uv run --locked modal run --detach --env main --profile sanika-05 -m packing_experiment.train --mode pad --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
+uv run --locked modal run --detach --env main --profile sanika-05 -m packing_experiment.train --mode naive_pack --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
+uv run --locked modal run --detach --env main --profile sanika-05 -m packing_experiment.train --mode masked_pack --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
 ```
 
 To compare learning-rate schedules, hold the batch mode and all other settings
 fixed. For example, these two runs use the same `pad` mode and seed:
 
 ```bash
-uv run --locked modal run --detach --env main --profile sanika-05 train_pretrain.py --mode pad --lr-schedule cosine --run-name pad-prefix-cosine-seed42 --wandb-entity dkbsingh7-iit-delhi
-uv run --locked modal run --detach --env main --profile sanika-05 train_pretrain.py --mode pad --lr-schedule inverse_sqrt --run-name pad-prefix-inverse-sqrt-seed42 --wandb-entity dkbsingh7-iit-delhi
+uv run --locked modal run --detach --env main --profile sanika-05 -m packing_experiment.train --mode pad --lr-schedule cosine --run-name pad-prefix-cosine-seed42 --wandb-entity dkbsingh7-iit-delhi
+uv run --locked modal run --detach --env main --profile sanika-05 -m packing_experiment.train --mode pad --lr-schedule inverse_sqrt --run-name pad-prefix-inverse-sqrt-seed42 --wandb-entity dkbsingh7-iit-delhi
 ```
 
 Both schedules warm up linearly to `peak_lr` at update 50. Cosine then gently
@@ -128,7 +141,7 @@ pre-clipping gradient norm, learning rate, raw token slots/sec, real
 non-padding tokens/sec, padding percentage, cumulative non-padding tokens,
 and observed SQL token fraction. Validation uses the same fixed standalone
 documents every 50 updates. It saves model, optimizer, and random-generator
-state to `/vol/checkpoints/day5/<run-name>/latest.pt`; rerunning the **same**
+state to `/vol/checkpoints/packing/<run-name>/latest.pt`; rerunning the **same**
 command resumes at the next update. The training comparison changes both
 padding and how many source documents fit in a fixed number of token slots,
 so compare validation loss against cumulative real tokens as well as updates.
@@ -224,7 +237,7 @@ Run: `a10-correctness-20261115T131212Z-4d56aee1`;
 call: `fc-01M7FNCEBGP8HD7KDKEGXN87J0`.
 [W&B metrics](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day5/runs/11d62c678d0247bcbacefb2e07723348),
 [Modal run](https://modal.com/apps/sanika-05/main/ap-vSKzGys4EVCPHxtWGL6qPQ).
-Checkpoint: `/vol/checkpoints/day5/a10-correctness-20261115T131212Z-4d56aee1/latest.pt`.
+Historical checkpoint: `/vol/checkpoints/day5/a10-correctness-20261115T131212Z-4d56aee1/latest.pt`.
 
 Earlier attempts exposed two trainer integration issues, fixed before this
 successful run: completion validation now prefers the v2 per-source marker
