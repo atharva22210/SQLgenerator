@@ -1,53 +1,17 @@
-"""Load trustworthy token files and evaluate filtered SQL documents only.
-
-The data-preparation job already tokenized the corpus. This module does NOT
-retokenize it: the tokenizer supplies vocabulary/special-token identity and
-text decoding for overlap matching. Corpus/DocumentFile use read-only memmaps.
-
-Filtering stores eligible original document indices in memory, preserving EOS
-boundaries. It does not rewrite the .bin files or prove semantic independence:
-matching is the conservative normalized question+SQL rule in data/sql_overlap.
-Training continues mixing English and SQL; ONLY validation is SQL-only here.
-"""
-import json
+"""Evaluate audited, held-out SQL documents from the pretraining corpus."""
+from pathlib import Path
 import random
 
 import torch
-from transformers import AutoTokenizer
 
-from data.dataloader import Corpus, DocumentFile, SQL_SOURCES, make_batch
-from data.sql_overlap import filter_validation
-from train_pretrain import DATA_DIR, volume, _tokenizer_path, _validate_corpus_files
+from data.dataloader import make_batch
+from training_common import _load_data_and_tokenizer
 
 
-def load_training_and_sql_validation():
-    """Return (tokenizer, training Corpus, filtered SQL-only Corpus).
-
-    Called by rank 0 after Modal mounts sqlgen-data at /vol. There are no
-    arguments because these experiment paths come from train_pretrain.
-    Completion metadata checks all file sizes/progress markers before reading.
-    The returned validation object intentionally has no English file reader:
-    callers must request SQL, as evaluate_sql does.
-    """
-    volume.reload()
-    metadata = json.loads((DATA_DIR / 'metadata.json').read_text())
-    tokenizer = AutoTokenizer.from_pretrained(_tokenizer_path(), local_files_only=True)
-    if (metadata['token_dtype'] != 'uint32' or len(tokenizer) != metadata['tokenizer_vocab_size']
-            or tokenizer.eos_token_id != metadata['eos_token_id'] or tokenizer.pad_token_id is None):
-        raise ValueError('Tokenizer and corpus identity mismatch')
-    _validate_corpus_files(DATA_DIR, metadata)
-    # A full training reader is required both for training and for comparing
-    # SQL validation tasks against ALL SQL training sources, not just the
-    # source from which a particular validation example originated.
-    train = Corpus(DATA_DIR, 'train', tokenizer.eos_token_id)
-    # __new__ creates the container without Corpus.__init__, which would also
-    # scan English validation. We deliberately populate only the SQL fields
-    # used by Corpus.sample(kind='sql'). This restricted object must not be
-    # passed to a function that expects an English validation reader.
-    validation = Corpus.__new__(Corpus)
-    validation.sql = [DocumentFile(DATA_DIR / f'{name}_val.bin', tokenizer.eos_token_id) for name in SQL_SOURCES]
-    filter_validation(train, validation, tokenizer)
-    return tokenizer, train, validation
+def load_training_and_sql_validation(grouped_sql_dir: Path | None = None, *, reload_volume: bool = True):
+    """Open the training mix and the held-out Grouped SQL split for distributed training."""
+    return _load_data_and_tokenizer(grouped_sql_dir, reload_volume=reload_volume,
+                                    sql_only_validation=True)
 
 
 def evaluate_sql(model, corpus, config, pad_id, device, *, full=False):

@@ -4,10 +4,9 @@ This is deliberately a CPU Modal job. Tokenization is preprocessing, not the
 GPU training step, so doing it once on CPU keeps future training jobs focused on
 the model and avoids repeating the same work every epoch.
 
-The script processes FineWeb-Edu and three text-to-SQL streams:
-``NumbersStation/NSText2SQL``, ``b-mc2/sql-create-context``, and
-``Clinton/Text-to-sql-v1``. The Gretel dataset is intentionally not included
-in this first pre-training corpus.
+This script prepares FineWeb-Edu. Grouped SQL uses the separate
+``data.prepare_grouped_sql`` job so its database and repository holdouts are
+audited before any SQL binaries are published.
 
 Run the preprocessing job::
 
@@ -40,9 +39,6 @@ OUTPUT_PATH = VOLUME_MOUNT / "pretrain_data"
 
 ENGLISH_DATASET = "HuggingFaceFW/fineweb-edu"
 ENGLISH_CONFIG = "sample-10BT"
-NSTEXT2SQL_DATASET = "NumbersStation/NSText2SQL"
-SQL_CONTEXT_DATASET = "b-mc2/sql-create-context"
-TEXT_TO_SQL_V1_DATASET = "Clinton/Text-to-sql-v1"
 
 # Qwen's vocabulary is larger than uint16 can represent. uint32 is still
 # compact compared with Python lists or strings and is lossless for token IDs.
@@ -416,7 +412,7 @@ def write_corpus(name: str, dataset: str, formatter, tokenizer, config=None) -> 
 
 
 def prepare() -> dict:
-    """Run each source once inside one CPU container and commit its outputs."""
+    """Build the English train and validation files used alongside Grouped SQL."""
     from transformers import AutoTokenizer
 
     # A Volume mount can have a stale view if another process uploaded files
@@ -444,23 +440,10 @@ def prepare() -> dict:
     # ``mkdir`` creates only the directory path inside the Volume; it does not
     # create a second Volume or affect files elsewhere in the workspace.
     OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
-    results = {}
-
-    sources = [
-        ("english", ENGLISH_DATASET, format_english, ENGLISH_CONFIG),
-        ("nstext2sql", NSTEXT2SQL_DATASET, format_nstext2sql, None),
-        ("sql_context", SQL_CONTEXT_DATASET, format_sql_context, None),
-        ("text_to_sql_v1", TEXT_TO_SQL_V1_DATASET, format_text_to_sql_v1, None),
-    ]
-    revisions = {}
-    for name, dataset, formatter, config in sources:
-        counts = write_corpus(name, dataset, formatter, tokenizer, config)
-        results.update({f"{name}_{split}": count for split, count in counts.items()})
-        checkpoint_path = OUTPUT_PATH / f"{name}.checkpoint.json"
-        # Fully completed legacy files need no conversion/read. Their old
-        # checkpoints have no revision, so record that uncertainty explicitly.
-        revisions[name] = (json.loads(checkpoint_path.read_text())["revision"]
-                           if checkpoint_path.exists() else None)
+    counts = write_corpus("english", ENGLISH_DATASET, format_english, tokenizer, ENGLISH_CONFIG)
+    checkpoint = OUTPUT_PATH / "english.checkpoint.json"
+    # Older completed English files can predate revision tracking.
+    revision = json.loads(checkpoint.read_text())["revision"] if checkpoint.exists() else None
 
     metadata = {
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -472,20 +455,14 @@ def prepare() -> dict:
         "split_strategy": "row_index % 10 == 0 -> validation; otherwise train",
         "eos_token_id": tokenizer.eos_token_id,
         "special_tokens": tokenizer.additional_special_tokens,
-        "datasets": {
-            "english": f"{ENGLISH_DATASET}/{ENGLISH_CONFIG}",
-            "nstext2sql": NSTEXT2SQL_DATASET,
-            "sql_context": SQL_CONTEXT_DATASET,
-            "text_to_sql_v1": TEXT_TO_SQL_V1_DATASET,
-        },
-        "dataset_revisions": revisions,
-        "token_counts": results,
+        "datasets": {"english": f"{ENGLISH_DATASET}/{ENGLISH_CONFIG}"},
+        "dataset_revisions": {"english": revision},
+        "token_counts": {f"english_{split}": count for split, count in counts.items()},
     }
     # Metadata makes the artifact auditable: later we can recover which datasets,
     # tokenizer, dtype, and row split produced these binary files.
     (OUTPUT_PATH / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    # Split checkpoints are committed along the way; commit metadata after all
-    # eight files finish so it acts as the completion signal for the corpus.
+    # Publish completion metadata after both English files finish.
     volume.commit()
     return metadata
 

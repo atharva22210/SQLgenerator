@@ -6,11 +6,13 @@ Returning plain dictionaries makes the plan readable in launcher logs and
 serializable as JSON for torchrun workers and as W&B run configuration.
 """
 from dataclasses import asdict
-from train_pretrain import TrainConfig
+from training_common import TrainConfig
 
 
 def experiment_plan(part: str, max_steps: int = 0, micro_batch_size: int = 0,
-                    seq_len: int = 2048, sql_fraction: float = 0.5) -> list[dict]:
+                    seq_len: int = 2048, sql_fraction: float = 0.5, *, eval_every: int = 25,
+                    val_batches: int = 128, checkpoint_blocks: int = 12,
+                    accumulation: int = 2) -> list[dict]:
     """Build a controlled suite; zero steps/batch selects the curriculum default.
 
     part='a': 300 updates, width 512, A1=8x8x1 and A2/A3=8x4x2.
@@ -18,6 +20,7 @@ def experiment_plan(part: str, max_steps: int = 0, micro_batch_size: int = 0,
     part='b': 100 updates, width 768, B1/B2=4x8x2; only no_sync differs.
     seq_len: Slots per row; use 64 for a cheap initial GPU check.
     sql_fraction: Probability of drawing a SQL document when filling a row.
+    eval_every: Optimizer updates between samples of val_batches documents.
     The larger preset is named by dimensions, not a misleading parameter count:
     the saved Qwen tokenizer makes the embedding alone larger than 100M.
     """
@@ -25,11 +28,17 @@ def experiment_plan(part: str, max_steps: int = 0, micro_batch_size: int = 0,
     # exit successfully before the next begins. Slice away A3 because the user
     # requested A1 -> A2 -> B1 -> B2 for this suite.
     if part == 'ab':
-        a = experiment_plan('a', max_steps, micro_batch_size, seq_len, sql_fraction)
-        b = experiment_plan('b', max_steps, micro_batch_size, seq_len, sql_fraction)
+        a = experiment_plan('a', max_steps, micro_batch_size, seq_len, sql_fraction,
+                            eval_every=eval_every, val_batches=val_batches)
+        b = experiment_plan('b', max_steps, micro_batch_size, seq_len, sql_fraction,
+                            eval_every=eval_every, val_batches=val_batches)
         return a[:2] + b
+    if part == 'c' and min(max_steps, micro_batch_size) >= 0:
+        from distributed_training.part_c import part_c_plan
+        return part_c_plan(max_steps, micro_batch_size, seq_len, sql_fraction,
+                           eval_every, val_batches, checkpoint_blocks, accumulation)
     if part not in {'a', 'b'} or max_steps < 0 or micro_batch_size < 0:
-        raise ValueError('part must be a/b/ab; steps and microbatch must be nonnegative')
+        raise ValueError('part must be a/b/ab/c; steps and microbatch must be nonnegative')
     # Zero is a CLI sentinel for "use the experiment default". An explicit
     # --max-steps affects both parts in a combined run; leaving it zero keeps
     # A at 300 updates and B at 100. This is an update count, not an epoch count.
@@ -58,5 +67,6 @@ def experiment_plan(part: str, max_steps: int = 0, micro_batch_size: int = 0,
                  train=asdict(TrainConfig(mode='masked_pack', micro_batch_size=batch,
                                          grad_accum_steps=accumulation, max_steps=steps,
                                          warmup_steps=min(50, steps), seq_len=seq_len,
-                                         sql_fraction=sql_fraction)))
+                                         sql_fraction=sql_fraction, eval_every=eval_every,
+                                         val_batches=val_batches)))
             for label, world, accumulation, duplicate, no_sync in cases]

@@ -1,6 +1,6 @@
 """Bounded A10 correctness check, submitted without a persistent local client.
 
-Run with ``modal run --detach modal_pretrain_check.py::main`` and pass the
+Run with ``modal run --detach -m packing_experiment.check::main`` and pass the
 team's W&B entity. This uses a fresh checkpoint name, checks actual CUDA
 attention before training, and allows at most 15 minutes of function runtime.
 """
@@ -12,14 +12,14 @@ import uuid
 
 import modal
 
-from train_pretrain import ROOT, TrainConfig, image, volume, wandb_secret
+from training_common import ROOT, TrainConfig, image, volume, wandb_secret
 
 
-app = modal.App("sqlgen-pretrain-correctness")
+app = modal.App("sqlgen-packing-correctness")
 # The imported trainer is a separate module, so include its source explicitly
 # alongside the test file; shipping this runner alone cannot import it remotely.
 check_image = (
-    image.add_local_python_source("train_pretrain")
+    image.add_local_python_source("packing_experiment")
     .add_local_file(ROOT / "tests/test_model.py", "/root/test_model.py")
 )
 
@@ -43,7 +43,7 @@ def check_on_gpu(run_name: str, wandb_entity: str) -> dict:
 
     import torch
     from test_model import TransformerTests
-    from train_pretrain import _checkpoint_path, _run
+    from packing_experiment.train import WANDB_PROJECT, _checkpoint_path, _run
 
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         raise RuntimeError("The correctness check requires a CUDA bf16 GPU")
@@ -63,7 +63,7 @@ def check_on_gpu(run_name: str, wandb_entity: str) -> dict:
     # evaluation frequency change so this also exercises durable checkpoints.
     config = TrainConfig(mode="masked_pack", max_steps=2, warmup_steps=1,
                          eval_every=1, val_batches=1)
-    trained = _run(config, wandb_entity, "sqlgen-day5", run_name)
+    trained = _run(config, wandb_entity, WANDB_PROJECT, run_name)
     state = torch.load(path, map_location="cpu", weights_only=False)
     if state["update"] != 2 or state["config"] != asdict(config):
         raise RuntimeError("Saved checkpoint does not match the two-update smoke run")

@@ -119,14 +119,16 @@ class DDPPartsTests(unittest.TestCase):
             mp.spawn(_two_rank_check, args=(rendezvous.as_uri(),), nprocs=2, join=True)
 
     def test_combined_plan_is_a1_a2_b1_b2(self):
-        cases = experiment_plan('ab')
+        cases = experiment_plan('ab', eval_every=20, val_batches=32)
         self.assertEqual([case['label'][:2] for case in cases], ['A1', 'A2', 'B1', 'B2'])
         self.assertEqual([case['train']['max_steps'] for case in cases], [300, 300, 100, 100])
         self.assertFalse(any(case['duplicate'] for case in cases))
+        self.assertEqual([(case['train']['eval_every'], case['train']['val_batches'])
+                          for case in cases], [(20, 32)] * 4)
 
     def test_launcher_submits_with_spawn(self):
         from unittest.mock import patch, MagicMock
-        import modal_ddp_parts_ab as launcher
+        from distributed_training import launch as launcher
         call = MagicMock(object_id='fc-test')
         # Mocking the cloud boundary proves the CLI submits without allocating
         # hardware or waiting for remote results during the unit test.
@@ -141,7 +143,7 @@ class DDPPartsTests(unittest.TestCase):
         from types import SimpleNamespace
         import numpy as np
         from distributed_training.sql_validation import evaluate_sql
-        from train_pretrain import TrainConfig
+        from training_common import TrainConfig
         source = SimpleNamespace(tokens=np.array([7, 9, 2, 3, 9]),
                                  ends=np.array([1, 4]), eligible_indices=np.array([1]))
         corpus = SimpleNamespace(sql=[source])  # Deliberately has no English reader.
