@@ -10,9 +10,9 @@ Example (small correctness run before a longer comparison)::
         -m packing_experiment.train --mode pad --max-steps 2 --warmup-steps 1 \
         --wandb-entity YOUR_WANDB_ENTITY
 
-Defaults target one A10: 4 x 2048 tokens per microbatch, two accumulation
-steps, and 128-position loss chunks. With 151,670 vocabulary entries the tied
-embedding alone is about 78 million parameters, so this is not a 35M model.
+Defaults target one A10: 4 x 4096 tokens per microbatch, two accumulation
+steps, and 128-position loss chunks. With 32,768 vocabulary entries the tied
+embedding accounts for 16.78 million of the model's 34.48 million parameters.
 Measure peak memory and throughput in a short correctness run first.
 """
 
@@ -250,7 +250,7 @@ def train_on_gpu(config: dict, wandb_entity: str, wandb_project: str, run_name: 
 @app.local_entrypoint()
 def main(
     mode: str = "pad", sql_fraction: float = 0.5,
-    micro_batch_size: int = 4, grad_accum_steps: int = 2, seq_len: int = 2048,
+    micro_batch_size: int = 4, grad_accum_steps: int = 2, seq_len: int = 4096,
     max_steps: int = 500, warmup_steps: int = 50, lr_schedule: str = "cosine",
     eval_every: int = 50,
     val_batches: int = 8, seed: int = 42, loss_chunk_size: int = 128,

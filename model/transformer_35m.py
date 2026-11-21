@@ -79,7 +79,7 @@ class TransformerConfig:
     n_heads: int = 8
     n_kv_heads: int = 4
     ffn_dim: int = 1408
-    max_seq_len: int = 2048
+    max_seq_len: int = 4096
     rope_theta: float = 10_000.0
     norm_eps: float = 1e-5
     use_qk_norm: bool = False

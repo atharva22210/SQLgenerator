@@ -10,8 +10,10 @@ import modal
 
 ROOT = Path(__file__).resolve().parent
 VOLUME_NAME = "sqlgen-data"
-DATA_DIR = Path("/vol/pretrain_data")
-TOKENIZER_DIR = Path("/vol/tokenizer")
+# Pin both layouts together: raw Qwen IDs cannot index a 32K embedding.
+TRAINING_BUILD = Path("/vol/byte_bpe/d6d855035d224fb891f1175bef7c59af")
+DATA_DIR = TRAINING_BUILD / "pretrain_data"
+TOKENIZER_DIR = TRAINING_BUILD / "tokenizer"
 
 volume = modal.Volume.from_name(VOLUME_NAME)
 wandb_secret = modal.Secret.from_name("wandb-secret", required_keys=["WANDB_API_KEY"])
@@ -54,7 +56,7 @@ class TrainConfig:
     sql_fraction: float = 0.5
     micro_batch_size: int = 4
     grad_accum_steps: int = 2
-    seq_len: int = 2048
+    seq_len: int = 4096
     max_steps: int = 500
     warmup_steps: int = 50
     lr_schedule: str = "cosine"

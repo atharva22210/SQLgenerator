@@ -243,7 +243,7 @@ def log_part_c_comparison(wandb, run, cases: list[dict], results: list[dict]) ->
 
 @app.local_entrypoint()
 def main(part: str = 'a', max_steps: int = 0, micro_batch_size: int = 0,
-         seq_len: int = 2048, sql_fraction: float = 0.5, wandb_entity: str = '',
+         seq_len: int = 4096, sql_fraction: float = 0.5, wandb_entity: str = '',
          wandb_project: str = 'sqlgen-distributed-training', grouped_sql_dir: str = '',
          eval_every: int = 0, val_batches: int = 128,
          checkpoint_blocks: int = 12, accumulation: int = 2, case: str = '') -> None:
@@ -253,7 +253,7 @@ def main(part: str = 'a', max_steps: int = 0, micro_batch_size: int = 0,
         part: 'a' includes A1/A2/A3, 'b' includes B1/B2, 'ab' is A1/A2/B1/B2.
         max_steps: Optimizer updates per case; 0 keeps A=300 and B=100.
         micro_batch_size: Sequences per GPU per microstep; 0 keeps A=8/B=4.
-        seq_len: Fixed token slots per row (2048 normally, 64 for small checks).
+        seq_len: Fixed token slots per row (4096 normally, 64 for small checks).
         sql_fraction: SQL document sampling probability during TRAINING.
             Validation remains filtered SQL-only regardless of this value.
         wandb_entity/wandb_project: Tracking destination, not credentials.
@@ -288,7 +288,7 @@ def main(part: str = 'a', max_steps: int = 0, micro_batch_size: int = 0,
         if directory.parent != DATA_DIR / 'grouped_sql' or len(directory.name) != 32 or any(
             char not in '0123456789abcdef' for char in directory.name
         ):
-            raise ValueError('Expected /vol/pretrain_data/grouped_sql/<corpus_id> from grouped SQL preparation')
+            raise ValueError('Expected a completed corpus under the configured training build grouped_sql directory')
         cases = [{**planned, 'grouped_sql_dir': str(directory)} for planned in cases]
     suite_labels = {'a': 'ddp-correctness', 'b': 'ddp-gradient-sync', 'ab': 'ddp-correctness-and-sync',
                     'c': 'sharding-and-memory'}

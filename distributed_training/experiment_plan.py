@@ -10,7 +10,7 @@ from training_common import TrainConfig
 
 
 def experiment_plan(part: str, max_steps: int = 0, micro_batch_size: int = 0,
-                    seq_len: int = 2048, sql_fraction: float = 0.5, *, eval_every: int = 25,
+                    seq_len: int = 4096, sql_fraction: float = 0.5, *, eval_every: int = 25,
                     val_batches: int = 128, checkpoint_blocks: int = 12,
                     accumulation: int = 2) -> list[dict]:
     """Build a controlled suite; zero steps/batch selects the curriculum default.
@@ -22,7 +22,7 @@ def experiment_plan(part: str, max_steps: int = 0, micro_batch_size: int = 0,
     sql_fraction: Probability of drawing a SQL document when filling a row.
     eval_every: Optimizer updates between samples of val_batches documents.
     The larger preset is named by dimensions, not a misleading parameter count:
-    the saved Qwen tokenizer makes the embedding alone larger than 100M.
+    the embedding count depends on the corpus vocabulary.
     """
     # The combined suite is explicitly ordered, not parallel: one case must
     # exit successfully before the next begins. Slice away A3 because the user
