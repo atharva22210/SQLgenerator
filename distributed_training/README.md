@@ -1,11 +1,19 @@
 # Distributed training experiments
 
+Canonical code now lives under [pretraining_experiments](../pretraining_experiments/README.md).
+The launch paths below remain compatible.
+
 **A · DDP correctness** compares the single-GPU reference with distinct
 two-GPU batches and an intentional duplicate-data case. **B · Gradient
 synchronization** compares syncing every microbatch with syncing on the last
 microbatch. **C · [Memory and sharding](memory-and-sharding.md)** compares DDP
 and FSDP with and without activation checkpointing. See the [experiment
 takeaways](takeaways.md) for measured results and their limits.
+
+`--initializer-range` selects the normal weight standard deviation for every
+suite case and rank; the default remains `0.02`. See
+[the initialization guide](../model/initialization.md) for the SwiGLU reference
+and the distinction from fan-in scaling.
 
 The question is whether splitting the SAME global update across two GPUs
 preserves its gradient, and how much communication `no_sync()` avoids.

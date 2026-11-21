@@ -1,9 +1,16 @@
 # Sequence packing on one GPU
 
+Canonical code now lives under [pretraining_experiments](../pretraining_experiments/README.md).
+The launch paths below remain compatible.
+
 Use [train.py](train.py) to run the packing comparison and [check.py](check.py)
 for the bounded CUDA correctness check. The W&B project is `sqlgen-packing`.
 Run names spell out the packing method, learning-rate schedule, and seed.
 See [Experiment takeaways](takeaways.md) for the comparison and its evidence.
+
+Fresh runs accept `--initializer-range` for the normal weight standard deviation;
+the default remains `0.02`. See [weight initialization](../model/initialization.md)
+for the SwiGLU reference, fan-in distinction, and checkpoint compatibility.
 
 Packing runs use FineWeb-Edu for English and the latest completed
 [Grouped SQL build](../distributed_training/README.md#grouped-sql-corpus) for SQL training
