@@ -97,7 +97,7 @@ class GroupedSQLTests(unittest.TestCase):
 
     def test_worker_loads_audited_overlay_without_legacy_sql_files(self):
         from distributed_training import sql_validation
-        import training_common
+        from training import config as training_config
         from data import prepare_pretrain_data
         from transformers import AutoTokenizer
 
@@ -130,13 +130,13 @@ class GroupedSQLTests(unittest.TestCase):
             unfinished.mkdir()
             (unfinished / "examples.json").write_text("{}")
             self.assertEqual(resolve_grouped_sql(root)[0], overlay)
-            with (patch.object(training_common, "DATA_DIR", root),
-                  patch.object(training_common.volume, "reload"),
-                  patch.object(training_common, "_tokenizer_path", return_value=root),
+            with (patch.object(training_config, "DATA_DIR", root),
+                  patch.object(training_config.volume, "reload"),
+                  patch.object(training_config, "_tokenizer_path", return_value=root),
                   patch.object(AutoTokenizer, "from_pretrained", return_value=FakeTokenizer()),
                   patch.object(prepare_pretrain_data, "tokenizer_fingerprint", return_value="tokenizer")):
                 _, train, validation = sql_validation.load_training_and_sql_validation()
-                _, _, packing_validation = training_common._load_data_and_tokenizer()
+                _, _, packing_validation = training_config._load_data_and_tokenizer()
                 self.assertEqual(packing_validation.english.tokens.tolist(), [2, 99])
                 self.assertEqual(packing_validation.sql[0].tokens.tolist(), [4, 99])
                 self.assertEqual(train.sql[0].tokens.tolist(), [3, 99])

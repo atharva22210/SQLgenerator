@@ -122,7 +122,7 @@ class BatchAnalysisTests(unittest.TestCase):
     def test_worker_only_catches_numerical_divergence(self):
         case = experiment_plan(batch_sizes=(16384,), learning_rates=(.001,))[0]
         with tempfile.TemporaryDirectory() as temp, patch.object(launch, 'OUTPUT_ROOT', Path(temp)), \
-             patch.object(launch.volume, 'commit'), patch('train.run_training') as train:
+             patch.object(launch.volume, 'commit'), patch('training.trainer.run_training') as train:
             train.side_effect = NumericalDivergence(2, 'nonfinite gradient')
             result = launch.execute_case(case, 'fixture', {}, 'test', 'test')
             self.assertEqual(result['status'], 'diverged')

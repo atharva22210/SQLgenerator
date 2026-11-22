@@ -1,6 +1,6 @@
 """Bounded A10 correctness check, submitted without a persistent local client.
 
-Run with ``modal run --detach -m pretraining_experiments.cuda_check::main`` and pass the
+Run with ``modal run --detach -m pretraining_experiments.sequence_packing.check::main`` and pass the
 team's W&B entity. This uses a fresh checkpoint name, checks actual CUDA
 attention before training, and allows at most 15 minutes of function runtime.
 """
@@ -13,6 +13,9 @@ import uuid
 import modal
 
 from training.config import ROOT, TrainConfig, image, volume, wandb_secret
+
+from training.trainer import _checkpoint_path, run_training
+from .launch import WANDB_PROJECT
 
 
 app = modal.App("sqlgen-packing-correctness")
@@ -43,7 +46,6 @@ def check_on_gpu(run_name: str, wandb_entity: str) -> dict:
 
     import torch
     from test_model import TransformerTests
-    from pretraining_experiments.sequence_packing import WANDB_PROJECT, _checkpoint_path, _run
 
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         raise RuntimeError("The correctness check requires a CUDA bf16 GPU")
@@ -63,7 +65,7 @@ def check_on_gpu(run_name: str, wandb_entity: str) -> dict:
     # evaluation frequency change so this also exercises durable checkpoints.
     config = TrainConfig(mode="masked_pack", max_steps=2, warmup_steps=1,
                          eval_every=1, val_batches=1)
-    trained = _run(config, wandb_entity, WANDB_PROJECT, run_name)
+    trained = run_training(config, wandb_entity, WANDB_PROJECT, run_name)
     state = torch.load(path, map_location="cpu", weights_only=False)
     if state["update"] != 2 or state["config"] != asdict(config):
         raise RuntimeError("Saved checkpoint does not match the two-update smoke run")

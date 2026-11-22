@@ -1,1 +1,1 @@
-"""Shared configuration, schedules, persistence, and tracking for train.py."""
+"""Shared training loop, configuration, schedules, checkpointing, and tracking."""

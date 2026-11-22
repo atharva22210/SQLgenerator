@@ -42,7 +42,7 @@ def experiment_plan(*, max_steps: int = 1000, smoke: bool = False) -> list[dict]
 
 def _train_case(case: dict, suite: str, dataset: dict, entity: str, project: str, smoke: bool) -> dict:
     """Train one pinned case; the smoke path proves resume without changing LR."""
-    from train import run_training as _run
+    from training.trainer import run_training as _run
     config = TrainConfig(**case['train'])
     output = OUTPUT_ROOT / suite / case['label']
     options = dict(output_dir=output, group=suite, title=f'Day 7 · {case["label"]}',

@@ -2,32 +2,34 @@
 
 Read an experiment's question and prediction before launching it. Its takeaway
 file separates measurements from explanations and uncertainty. Model code stays
-in `model/`, corpus preparation/sampling in `data/`, and shared experiment code
+in `model/`, corpus preparation/sampling in `data/`, and experiment launchers and analysis
 in this package. Python 3.13.15 and the committed `uv.lock` define the environment.
 
 | Experiment | Code / execution guide | Analytical takeaways |
 | --- | --- | --- |
-| Sequence packing | [sequence_packing/launch.py](sequence_packing/launch.py), [commands](../packing_experiment/README.md) | [Packing](sequence_packing/takeaways.md) |
+| Sequence packing | [sequence_packing/launch.py](sequence_packing/launch.py), [commands](sequence_packing/README.md) | [Packing](sequence_packing/takeaways.md) |
 | DDP correctness | [distributed_training/experiment_plan.py](../distributed_training/experiment_plan.py), [commands](../distributed_training/README.md) | [DDP correctness](../distributed_training/ddp_correctness_takeaways.md) |
 | Gradient synchronization | [distributed_training/ddp_core.py](../distributed_training/ddp_core.py), `launch --part b` | [Gradient sync](../distributed_training/gradient_sync_takeaways.md) |
 | Sharding and activation memory | [distributed_training/fsdp_checkpointing.py](../distributed_training/fsdp_checkpointing.py), [commands](../distributed_training/memory-and-sharding.md) | [Memory/sharding](../distributed_training/memory_takeaways.md) |
 | Seed variation | [seed_and_schedules/seed_noise.py](seed_and_schedules/seed_noise.py) | [Seed noise](seed_and_schedules/seed_noise_takeaways.md) |
-| Memory/resume check | [Shared trainer](../train.py), `--smoke` | [Measured smoke check](seed_and_schedules/smoke_takeaways.md) |
+| Memory/resume check | [Shared trainer](../training/trainer.py), `--smoke` | [Measured smoke check](seed_and_schedules/smoke_takeaways.md) |
 | Learning-rate schedules | [seed_and_schedules/launch.py](seed_and_schedules/launch.py) | [Schedules](seed_and_schedules/schedules_takeaways.md) |
 
-The shared single-GPU loop lives outside this package in [`train.py`](../train.py).
-Experiments supply settings and launch that loop. Shared support code lives in
-[`training/`](../training/): configuration/data loading, schedules, checkpointing,
-dataset identity, and W&B tracking. The distributed experiments retain their
+Experiment launchers supply settings to [`training/trainer.py`](../training/trainer.py),
+the shared single-GPU loop. The [`training/`](../training/) package also handles
+configuration, data loading, schedules, checkpointing, dataset identity, and
+W&B tracking. The distributed experiments retain their
 rank-specific collective loop in `../distributed_training/ddp_worker.py`.
 
 ```text
-train.py                         # shared single-GPU training loop
-training/                        # shared support, no experiment launchers
+training/
+  trainer.py                     # shared single-GPU training loop
 pretraining_experiments/
   sequence_packing/
     launch.py
     check.py
+    README.md
+    figures/
     takeaways.md
   seed_and_schedules/
     launch.py
@@ -42,9 +44,7 @@ distributed_training/            # earlier DDP/FSDP experiments
   ...
 ```
 
-Old module paths remain small compatibility imports; they contain no duplicate
-training loop. Local reorganization does not replace the uploaded source in an
-already running Modal job.
+Already running Modal jobs continue using the source uploaded when they launched.
 
 ## Batch size and learning-rate scaling
 

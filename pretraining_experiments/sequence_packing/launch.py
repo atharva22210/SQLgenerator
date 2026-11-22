@@ -7,7 +7,7 @@ W&B records the metrics. Training starts only when you run the command.
 Example (small correctness run before a longer comparison)::
 
     uv run --locked modal run --detach --env main --profile sanika-05 \
-        -m pretraining_experiments.sequence_packing --mode pad --max-steps 2 --warmup-steps 1 \
+        -m pretraining_experiments.sequence_packing.launch --mode pad --max-steps 2 --warmup-steps 1 \
         --wandb-entity YOUR_WANDB_ENTITY
 
 Defaults target one A10: 4 x 4096 tokens per microbatch, two accumulation
@@ -23,7 +23,7 @@ import json
 import modal
 
 from training.config import TrainConfig, image, volume, wandb_secret
-from train import run_training as _run, _checkpoint_path
+from training.trainer import _checkpoint_path, run_training
 
 WANDB_PROJECT = "sqlgen-packing"
 app = modal.App("sqlgen-packing")
@@ -36,7 +36,7 @@ app = modal.App("sqlgen-packing")
 )
 def train_on_gpu(config: dict, wandb_entity: str, wandb_project: str, run_name: str) -> dict:
     """Remote boundary: runs on one A10, while the local entrypoint only submits."""
-    return _run(TrainConfig(**config), wandb_entity, wandb_project, run_name)
+    return run_training(TrainConfig(**config), wandb_entity, wandb_project, run_name)
 
 
 @app.local_entrypoint()

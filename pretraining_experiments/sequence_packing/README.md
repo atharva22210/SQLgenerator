@@ -1,19 +1,16 @@
 # Sequence packing on one GPU
 
-Canonical code now lives under [pretraining_experiments](../pretraining_experiments/README.md).
-The launch paths below remain compatible.
-
-Use [train.py](train.py) to run the packing comparison and [check.py](check.py)
+Use [launch.py](launch.py) to run the packing comparison and [check.py](check.py)
 for the bounded CUDA correctness check. The W&B project is `sqlgen-packing`.
 Run names spell out the packing method, learning-rate schedule, and seed.
 See [Experiment takeaways](takeaways.md) for the comparison and its evidence.
 
 Fresh runs accept `--initializer-range` for the normal weight standard deviation;
-the default remains `0.02`. See [weight initialization](../model/initialization.md)
+the default remains `0.02`. See [weight initialization](../../model/initialization.md)
 for the SwiGLU reference, fan-in distinction, and checkpoint compatibility.
 
 Packing runs use FineWeb-Edu for English and the latest completed
-[Grouped SQL build](../distributed_training/README.md#grouped-sql-corpus) for SQL training
+[Grouped SQL build](../../distributed_training/README.md#grouped-sql-corpus) for SQL training
 and validation. Resuming a Grouped SQL checkpoint keeps its original build.
 Checkpoints from the earlier SQL sources require a new run name. New runs
 use `/vol/checkpoints/packing`. Earlier snapshots and W&B runs are still
@@ -63,14 +60,14 @@ are finite. It creates a unique run name and has a 15-minute function timeout:
 
 ```bash
 uv run --locked modal run --detach --env main --profile sanika-05 \
-  -m packing_experiment.check::main --wandb-entity dkbsingh7-iit-delhi
+  -m pretraining_experiments.sequence_packing.check::main --wandb-entity dkbsingh7-iit-delhi
 ```
 
 To run just the ordinary trainer for two updates instead:
 
 ```bash
 uv run --locked modal run --detach --env main --profile sanika-05 \
-  -m packing_experiment.train --mode pad --max-steps 2 --warmup-steps 1 \
+  -m pretraining_experiments.sequence_packing.launch --mode pad --max-steps 2 --warmup-steps 1 \
   --eval-every 1 --val-batches 2 --run-name packing-pad-check \
   --wandb-entity dkbsingh7-iit-delhi
 ```
@@ -96,17 +93,17 @@ sequence length, batch size, learning-rate schedule, and evaluation settings.
 The default schedule is `cosine`:
 
 ```bash
-uv run --locked modal run --detach --env main --profile sanika-05 -m packing_experiment.train --mode pad --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
-uv run --locked modal run --detach --env main --profile sanika-05 -m packing_experiment.train --mode naive_pack --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
-uv run --locked modal run --detach --env main --profile sanika-05 -m packing_experiment.train --mode masked_pack --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
+uv run --locked modal run --detach --env main --profile sanika-05 -m pretraining_experiments.sequence_packing.launch --mode pad --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
+uv run --locked modal run --detach --env main --profile sanika-05 -m pretraining_experiments.sequence_packing.launch --mode naive_pack --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
+uv run --locked modal run --detach --env main --profile sanika-05 -m pretraining_experiments.sequence_packing.launch --mode masked_pack --sql-fraction 0.5 --wandb-entity dkbsingh7-iit-delhi
 ```
 
 To compare learning-rate schedules, hold the batch mode and all other settings
 fixed. For example, these two runs use the same `pad` mode and seed:
 
 ```bash
-uv run --locked modal run --detach --env main --profile sanika-05 -m packing_experiment.train --mode pad --lr-schedule cosine --run-name pad-prefix-cosine-seed42 --wandb-entity dkbsingh7-iit-delhi
-uv run --locked modal run --detach --env main --profile sanika-05 -m packing_experiment.train --mode pad --lr-schedule inverse_sqrt --run-name pad-prefix-inverse-sqrt-seed42 --wandb-entity dkbsingh7-iit-delhi
+uv run --locked modal run --detach --env main --profile sanika-05 -m pretraining_experiments.sequence_packing.launch --mode pad --lr-schedule cosine --run-name pad-prefix-cosine-seed42 --wandb-entity dkbsingh7-iit-delhi
+uv run --locked modal run --detach --env main --profile sanika-05 -m pretraining_experiments.sequence_packing.launch --mode pad --lr-schedule inverse_sqrt --run-name pad-prefix-inverse-sqrt-seed42 --wandb-entity dkbsingh7-iit-delhi
 ```
 
 Both schedules warm up linearly to `peak_lr` at update 50. Cosine then gently

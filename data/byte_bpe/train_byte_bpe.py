@@ -13,7 +13,7 @@ import modal
 
 from data.grouped_corpus import resolve_grouped_sql
 from data.prepare_pretrain_data import OUTPUT_PATH as DATA_DIR, find_tokenizer_path
-from training_common import _validate_corpus_files, image, volume
+from training.config import _validate_corpus_files, image, volume
 
 app = modal.App("sqlgen-byte-bpe")
 settings = dict(image=image, volumes={"/vol": volume}, timeout=86400)

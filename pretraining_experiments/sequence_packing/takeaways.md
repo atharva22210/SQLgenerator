@@ -27,11 +27,11 @@ also changed the number of useful training tokens per update.
 | [Unmasked packing](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day5/runs/cf71dfdbdb944981bdb146222ec884ff) | 25,811 | 8.19M | 6.194 | 0.802 |
 | [Masked packing](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day5/runs/9803edfba7e04d539b9fd75588042232) | 26,104 | 8.19M | 6.264 | 0.786 |
 
-![Useful throughput](../../packing_experiment/figures/effective-throughput.png)
-![Cumulative useful tokens](../../packing_experiment/figures/cumulative-tokens.png)
-![Training loss](../../packing_experiment/figures/training-loss.png)
-![English validation loss](../../packing_experiment/figures/english-validation-loss.png)
-![SQL validation loss](../../packing_experiment/figures/sql-validation-loss.png)
+![Useful throughput](figures/effective-throughput.png)
+![Cumulative useful tokens](figures/cumulative-tokens.png)
+![Training loss](figures/training-loss.png)
+![English validation loss](figures/english-validation-loss.png)
+![SQL validation loss](figures/sql-validation-loss.png)
 
 ## Explanation
 
