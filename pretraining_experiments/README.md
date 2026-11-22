@@ -48,24 +48,39 @@ Already running Modal jobs continue using the source uploaded when they launched
 
 Keep one `takeaways.md` alongside the experiment code. Use the experiment's
 name in the report, plots, and run labels so readers can find the evidence later.
-Start with the main finding once results are available.
+Write for a teammate seeing the experiment for the first time.
 
 ```markdown
 # <Experiment name>
 
-## Question and prediction
-## Controlled settings
+## Why we ran it
+## What we ran
+## Sanity checks
 ## Results and interpretation
-## Limitations and next experiment
+## Additional observations (optional)
+## Conclusion
+### What the experiment showed
+### What remains uncertain
+## Next experiment
 ## Sources
 ```
 
-Use this outline as a starting point. Give each main observation a heading of its own,
-and add sections for sanity checks, memory, or resume behavior when they help explain
-the evidence. Put a chart beside the observation it supports. Show phases and late-run
-detail when they clarify the comparison, and label smoothing or other transformations.
-Use tables for exact results, including individual seeds and their sample spread.
-Mark unmeasured predictions clearly and link the original runs or data.
+Start with why the question matters to the project and what you predicted before
+the run. Describe what varied, what you held fixed, and the training and evaluation
+budgets. In the sanity checks, compare the actual run with the expected schedule,
+budget, or metrics where those checks apply.
+
+Order results so readers have the reference points they need. For example, show
+how much runs vary across seeds before using that spread to interpret a schedule
+gain. Walk through the phases when timing helps explain the result. Put charts
+beside the claims they support, label smoothing, and use tables for exact values
+such as individual seed results and their sample spread.
+
+In the conclusion, say what the results establish under the tested settings
+and what decision that supports. If the results are inconclusive, say so plainly.
+Explain what remains uncertain and which additional measurements would address it.
+Link the original runs or data. Adapt the headings to the experiment and use an
+additional observations section for findings outside the main comparison.
 
 ## Batch size and learning-rate scaling
 
@@ -152,8 +167,8 @@ uv run --locked modal run --detach --env main --profile sanika-05 \
 Inspect `tracking-check.json` and open the linked run's `charts/train_lr`,
 `charts/train_loss`, `charts/val_sql_loss`, and `charts/val_english_loss`.
 The API check proves chart data exists; browser rendering still needs inspection.
-The [seed and schedule sanity checks](seed_and_schedules/takeaways.md#sanity-checks)
-cover the full-workload smoke run and the verified upload fix.
+The full-workload smoke run and its tracking recheck are listed in the
+[experiment sources](seed_and_schedules/takeaways.md#sources).
 The CPU coordinator verifies fresh uploaded history with bounded backoff after
 GPU work finishes. To recheck an existing suite, set `SUITE_ID` to its printed ID:
 

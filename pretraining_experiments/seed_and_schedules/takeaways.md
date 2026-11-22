@@ -1,121 +1,153 @@
 # Seed variation and learning-rate schedules in pretraining
 
-Both warmup–stable–decay (WSD) runs finished with lower SQL and English validation loss than all
-three standard cosine runs. WSD pulled ahead during the stable phase, and its final gains were
-much larger than the spread across cosine seeds. The two WSD tails finished close enough that
-either is a reasonable baseline for the next experiment.
+## Why we ran this experiment
 
-## Question and prediction
+A lower validation loss in one run can come from a better training setting or from a favorable
+seed. The training seed controls both the initial weights and which documents the model sees.
+Repeating standard cosine with different seeds gives us a baseline for how much loss can vary
+with the schedule held fixed. We can then judge whether switching schedules produces a gain
+large enough to be worth following up.
 
-We asked how much loss changes when we change the training seed, and whether holding the
-learning rate high for longer helps at a fixed token budget. Before the run, we expected WSD
-might sit higher during its stable phase, then catch up during decay. We recorded no numerical
-prediction for the seed spread.
+We compared standard cosine with warmup–stable–decay (WSD) at a fixed training budget. We
+expected WSD's higher learning rate might keep validation loss elevated during the stable phase,
+with the advantage appearing during cooldown. We also wanted to see whether the shape of that
+cooldown mattered.
 
-## Controlled settings
+## What we ran
 
-The five runs used the same 34.48M-parameter model, AdamW optimizer, dataset build, and budget
-of 1,000 updates on one A10 per run. Every schedule warmed up for 100 updates to `6e-4` and
-finished at `6e-5`. Standard cosine decayed immediately after warmup. WSD held `6e-4` through
-update 800, then decayed over updates 801–1,000 with a linear or cosine tail. We tested standard
-cosine with seeds 1, 2, and 3, and both WSD tails with seed 1.
-[W&B comparison](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/ap7dswze)
+All five runs used the same 34.48M-parameter model, AdamW optimizer, dataset build, and budget
+of 1,000 optimizer updates on one A10 per run. They shared a 100-update warmup to `6e-4` and
+finished at `6e-5`. Only the schedule and training seed varied.
 
-![Applied learning rate by optimizer update for standard cosine, WSD linear, and WSD cosine, with a cooldown zoom](figures/learning_rate_schedules.png)
+| Schedule | Training seeds | Learning rate after warmup |
+| --- | --- | --- |
+| Standard cosine | 1, 2, 3 | Cosine decay through update 1,000 |
+| WSD linear | 1 | Hold `6e-4` through update 800, then decay linearly |
+| WSD cosine | 1 | Hold `6e-4` through update 800, then decay along a cosine curve |
+
+The schedules start together. The two WSD variants first differ in their learning rate at
+update 801. [W&B comparison](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/ap7dswze)
+
+![Logged learning rate by optimizer update for the three schedules, with a cooldown zoom](figures/learning_rate_schedules.png)
 
 ## Sanity checks
 
-1. **Check the work done.** Each run completed 1,000 optimizer updates. Masked packing
-   filled `8 × 4 × 4,096 = 131,072` input slots per update, so every run reached **131,072,000
-   non-padding input tokens**. The loss uses fewer targets because packing masks document
-   boundaries and next-token prediction shifts the labels.
-2. **Check the schedule and the chart axis.** The logged LR followed the expected phases and
-   endpoints. The raw W&B history for cosine seed 1 repeats updates 601–640 after its checkpoint
-   resume. The published chart contains one point per optimizer update and uses the resumed
-   trajectory.
-3. **Keep validation comparable.** Each run evaluated the same 128 standalone document draws per
-   corpus every 50 updates using validation seed 12345. Each corpus's loss weights its predicted
-   tokens equally. Read training loss for the overall trajectory and use the fixed validation
-   samples to compare runs.
-4. **Check numerical stability.** All runs finished with finite logged losses and norms. The
-   largest pre-clip gradient norms were **11.0–18.8 at updates 26–33**, during the shared
-   warmup. With a threshold of 1.0, only 6–16 of the 900 updates after warmup triggered clipping
-   per run. The histories show when the spikes occurred. Identifying their cause would require
-   additional instrumentation.
-
-The ten-update smoke run first checked that this workload fit and could resume. It peaked at
-6.466 GiB allocated, restored from update 2, and finished with 1,310,720 input tokens. Its first
-W&B verification saw seven updates. A fresh uncached query recovered all ten scalar rows and all
-four chart tables.
+1. **Equal training budget.** Masked packing filled all `8 × 4 × 4,096 = 131,072` input slots
+   per update. Over 1,000 updates that gives **131,072,000 non-padding input tokens** per run,
+   matching the logged counts. The loss uses fewer targets because of the next-token shift and
+   the mask at document boundaries.
+2. **Correct learning rates.** The logged rates matched the expected warmup, WSD hold, decay
+   phases, and final rate when plotted by optimizer update.
+3. **Comparable validation.** Each run used the same 128 standalone document draws per corpus
+   with validation seed 12345 and evaluated every 50 updates. SQL and English losses were
+   computed separately as means over valid prediction targets.
+4. **Finite training metrics.** All runs completed 1,000 updates, and the logged training
+   losses, validation losses, and gradient norms stayed finite.
 
 ## Results and interpretation
 
-### When WSD pulled ahead
-
-![Training, SQL validation, and English validation loss for three seed-1 schedules, with late-run zooms](figures/schedule_comparison.png)
-
-The seed-1 curves were close at the end of warmup. By update 200, both WSD runs were slightly
-ahead of standard cosine seed 1 on both validation sets. The gap grew while WSD held its LR
-steady. At update 800, WSD was about **0.09 lower on SQL** and **0.19 lower on English**. Both
-WSD runs were already below the full three-seed cosine range.
-
-At update 800, standard cosine was using `1.23e-4` while WSD was still at `6e-4`. The curves are
-consistent with a higher LR helping the model make faster progress during this phase. During the
-final 200 updates, all three seed-1 runs improved, and WSD widened its lead to about **0.13 on
-SQL** and **0.30 on English**. Cooldown added to a lead that was already there. All five runs
-reached their lowest observed validation losses at the last evaluation, so the conclusions apply
-to this training budget.
-
-The figures come from the published W&B comparison tables. Training traces use a 25-update
-trailing average to make the trend visible. Validation markers are the original measurements.
-[W&B chart source](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/ap7dswze)
-
-### How large was the seed spread?
+### How much did the cosine runs vary across seeds?
 
 ![Training, SQL validation, and English validation loss for three standard cosine seeds, with late-run zooms](figures/cosine_seed_comparison.png)
 
-| Run or statistic | Final SQL loss | Final English loss | Source |
+The three runs followed similar trajectories. The late-run panels show the spread that remains
+when the optimizer, schedule, and validation sample are fixed. In both loss figures, training
+traces use a 25-update trailing average and validation markers show the recorded evaluations.
+
+| Standard cosine run | Final SQL loss | Final English loss | Source |
 | --- | ---: | ---: | --- |
-| Standard cosine, seed 1 | 0.796816 | 4.708972 | [W&B](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/822ec9a7a3db46d29f5ba7ae5152746e) |
-| Standard cosine, seed 2 | 0.812063 | 4.753372 | [W&B](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/d2de060b9c16451189ff44c2bd662fed) |
-| Standard cosine, seed 3 | 0.807651 | 4.713550 | [W&B](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/ae53e35464c94f38bed3c3b933277621) |
-| **Cosine mean, n = 3** | **0.805510** | **4.725298** | |
-| **Cosine sample std. dev., n = 3** | **0.007846** | **0.024420** | |
-| WSD linear, seed 1 | 0.667811 | **4.403726** | [W&B](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/9d013a624ebf457d9b54feb62540e7f0) |
-| WSD cosine, seed 1 | **0.663367** | 4.406684 | [W&B](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/6888a42b4d914085abfaf9fef0439e8e) |
+| Seed 1 | 0.796816 | 4.708972 | [W&B](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/822ec9a7a3db46d29f5ba7ae5152746e) |
+| Seed 2 | 0.812063 | 4.753372 | [W&B](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/d2de060b9c16451189ff44c2bd662fed) |
+| Seed 3 | 0.807651 | 4.713550 | [W&B](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/ae53e35464c94f38bed3c3b933277621) |
+| **Mean (3 seeds)** | **0.805510** | **4.725298** | |
+| **Sample standard deviation (3 seeds)** | **0.007846** | **0.024420** | |
 
-Cosine seed 1 was the strongest cosine run on both validation sets. Against that same-seed
-baseline, WSD lowered SQL loss by **0.129–0.133** and English loss by **0.302–0.305**. Even
-twice the observed cosine standard deviation was much smaller, at **0.0157 on SQL** and **0.0488
-on English**. This is a descriptive comparison with three cosine seeds and one run per WSD tail.
-The seed changes both initialization and document sampling, and the seed-1 training losses began
-to differ at update 2 under the same warmup schedule. Paired WSD runs with seeds 2 and 3 would
-show how well the larger gain repeats.
+The sample standard deviation summarizes how far the three final losses typically sit from
+their mean. It was about **0.008 on SQL** and **0.024 on English**. Seed 1 finished with the
+lowest loss among the cosine runs on both corpora. Both WSD runs also used seed 1, which
+lets us compare schedules while holding the training seed fixed.
 
-The gap between the WSD tails was only **0.0044 on SQL**, favoring cosine decay, and **0.0030 on
-English**, favoring linear decay. Those differences are small on the scale of the observed seed
-spread. Both validation metrics measure next-token prediction on fixed samples. SQL execution
-would give a separate measure of downstream quality. [Validation observations](validation_results.csv)
+### When did the schedules separate?
 
-### The training mixture was more SQL-heavy than it looked
+![Training, SQL validation, and English validation loss for three seed-1 schedules, with late-run zooms](figures/schedule_comparison.png)
 
-The sampler's `sql_fraction=0.50` gives SQL half the **document draws**. SQL contributed more
-input tokens per draw after packing, so it accounted for about **62.7% of input tokens** in
-every run. Between **76 and 93 updates per run** exceeded 70% SQL, and the highest single update
-reached **80.3%**. That skew is a concrete reason to test a more English-heavy mixture. Compare
-each corpus against its own baseline because SQL and English have different levels of token
-predictability. [Document sampler](../../data/dataloader.py) ·
-[W&B training histories](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7)
+**Warmup, updates 1–100.** All three schedules used the same learning rates, and both validation
+losses fell quickly. At update 100, the seed-1 runs were within 0.034 of each other on SQL and
+0.025 on English.
+
+**Early after warmup, updates 101–200.** Standard cosine had only eased to `5.84e-4` by update
+200, while WSD was still at `6e-4`. Both WSD runs were slightly ahead of cosine seed 1 on SQL
+and English at that point. Cosine seed 2 still had the lowest loss on both. The early order
+therefore depended on which cosine run we used as the reference.
+
+**Rest of the stable phase, updates 201–800.** Both WSD runs had lower SQL loss than all three
+cosine runs from update 300 onward. The same held for English from update 400. By update 800,
+WSD was about **0.09 lower on SQL** and **0.19 lower on English** than cosine seed 1. Cosine had
+decayed to `1.23e-4` while WSD still held `6e-4`. The growing lead is consistent with the
+higher sustained rate helping the model make more progress over this part of the budget.
+
+**Cooldown, updates 801–1,000.** From update 800 to 1,000, both WSD runs improved by about 0.089
+on SQL and 0.204 on English. Cosine seed 1 improved by 0.046 and 0.089, respectively. Cooldown
+widened a lead we had expected to emerge during that phase.
+All five runs reached their best observed validation losses at the final evaluation.
+
+| Seed-1 schedule | Final SQL loss | Final English loss | Source |
+| --- | ---: | ---: | --- |
+| Standard cosine | 0.796816 | 4.708972 | [W&B](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/822ec9a7a3db46d29f5ba7ae5152746e) |
+| WSD linear | 0.667811 | **4.403726** | [W&B](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/9d013a624ebf457d9b54feb62540e7f0) |
+| WSD cosine | **0.663367** | 4.406684 | [W&B](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7/runs/6888a42b4d914085abfaf9fef0439e8e) |
+
+Relative to cosine seed 1, the WSD gains were **0.129–0.133 on SQL** and **0.302–0.305 on
+English**. Those gains were roughly 16–17 times the measured cosine seed standard deviation on
+SQL and 12 times on English. That makes the schedule result worth following up.
+
+The two WSD tails finished close together. Cosine decay finished ahead by 0.0044 on SQL,
+while linear decay finished ahead by 0.0030 on English. [Validation observations](validation_results.csv)
+
+## Additional observations
+
+**SQL made up more of the token budget than the document setting suggested.** A
+`sql_fraction` of 0.50 gives SQL half the document draws. The sampled SQL documents contributed
+more tokens per draw after packing, so SQL accounted for about **62.7% of input tokens** in
+each run. SQL exceeded 70% of the input tokens on 76–93 updates per run. This gives us a
+reason to test a higher English token share and compare each corpus's validation loss with
+its own baseline. [Document sampler](../../data/dataloader.py)
+
+**The largest gradient norms occurred during warmup.** The pre-clip peaks ranged from 11.0 to
+18.8 at updates 26–33, when all runs shared the same learning-rate schedule. With a clipping
+threshold of 1.0, only 6–16 updates per run crossed the threshold after warmup. The recorded
+norms show when the spikes occurred. Diagnosing their cause would require finer-grained
+measurements. [W&B training histories](https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-day7)
+
+## Conclusion
+
+### What the experiment showed
+
+**WSD gave lower validation loss at the tested budget of 1,000 updates.** Both WSD tails
+finished below all three standard cosine runs on both SQL and English. On SQL, the gain
+against the matched cosine seed was about **0.13**, compared with **0.015** between the best
+and worst cosine seeds. The English gains likewise exceeded the observed seed spread.
+This gives us enough evidence to choose WSD for this setup.
+
+### What remains uncertain
+
+The decay-tail choice remains open. The two WSD tails finished very close together, with
+cosine decay ahead on SQL and linear decay ahead on English. Both used seed 1. Running both
+tails with seeds 2 and 3 would estimate the spread within WSD and help determine whether
+either tail has a consistent edge. Those runs would also show how consistently WSD's lead
+over standard cosine repeats as the initial weights and sampled documents change.
+
+These results measure next-token loss on fixed validation samples. A generation evaluation
+would be needed to compare downstream SQL execution quality.
 
 ## Next experiment
 
-Use WSD linear as the reference and change only `sql_fraction` from `0.50`
-to `0.40`. A sampler-only check can verify the estimate of roughly 53% SQL input tokens before
-spending GPU time. Then match the seed and 131.072M input-token budget, track token and
-loss-target shares, and compare the two validation losses. We expect English loss to improve
-with more English exposure. The open question is how much SQL validation loss or held-out SQL
-generation quality changes. One comparison arm takes about half an hour of A10 training, plus
-evaluation and I/O.
+Use WSD linear as the reference and change only `sql_fraction` from 0.50 to 0.40. Check with
+the sampler first whether this brings the SQL input share near the estimate of 53%. Then
+match the seed and input-token budget, track the token and loss-target shares, and compare
+the two validation losses. We expect English loss to improve with greater English exposure.
+The experiment would show how much SQL validation loss changes alongside it. One comparison
+arm takes about half an hour of A10 training, plus evaluation and I/O.
 
 ## Sources
 
@@ -137,7 +169,9 @@ evaluation and I/O.
   pools contain 7,830,836,989 and 610,246,589 tokens.
 - The Modal volume retains full histories in
   `/checkpoints/pretraining_experiments/day07/day07-full-2a6757d322c4/<case>/result.json`. The
-  smoke run and its tracking recheck are in
+  ten-update smoke run verified a checkpoint restore and complete chart data. It peaked at
+  6.466 GiB allocated and completed all 1,310,720 input tokens. Its metrics and the tracking
+  recheck are in
   `/checkpoints/pretraining_experiments/day07/day07-smoke-073af7c11d79/`. The smoke W&B run ID
   was `004edebb74da49cdb7630d29e8bb0266` and was later deleted.
   [All 100 validation rows](validation_results.csv) ·
