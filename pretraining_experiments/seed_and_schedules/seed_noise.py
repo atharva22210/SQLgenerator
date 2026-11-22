@@ -1,4 +1,4 @@
-"""Day 7 question: how much does final loss vary across training seeds?"""
+"""How much does final loss vary across training seeds?"""
 from dataclasses import asdict
 from training.config import TrainConfig
 

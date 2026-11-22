@@ -25,8 +25,9 @@ CHECKPOINT_DIR = Path('/vol/checkpoints/packing')
 def _evaluate(model, corpus, config: TrainConfig, pad_id: int, device) -> dict[str, float]:
     """Evaluate fixed standalone documents, using the same target-weighted loss.
 
-    Day 7 fixes validation_seed across training seeds. A seed-dependent validation
-    sample would mix evaluation variation into the measured training noise floor.
+    The seed and schedule comparison fixes validation_seed across training seeds.
+    A seed-dependent validation sample would mix evaluation variation into the
+    measured training noise floor.
     Each corpus has its own generator, independent of the training sample stream.
     """
     import torch

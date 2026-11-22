@@ -1,1 +1,3 @@
-"""Day 7: seed variation and learning-rate schedules."""
+"""Seed variation and learning-rate schedules."""
+
+EXPERIMENT_NAME = 'Seed variation and learning-rate schedules'

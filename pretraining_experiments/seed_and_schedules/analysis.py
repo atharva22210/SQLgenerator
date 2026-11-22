@@ -1,10 +1,11 @@
-"""Validate completed Day 7 results and write an evidence-based learning report."""
+"""Validate seed and schedule results and render a measured report."""
 import argparse
 import json
 import math
 from pathlib import Path
 import statistics
 
+from pretraining_experiments.seed_and_schedules import EXPERIMENT_NAME
 from training.tracking import curve_payload
 
 
@@ -42,7 +43,7 @@ def analyze(results: list[dict]) -> dict:
         key = (f'cosine-seed-{config["seed"]}' if config['lr_schedule'] == 'cosine'
                else f'wsd-{config["wsd_decay_type"]}-seed-{config["seed"]}')
         if key in by_case:
-            raise ValueError('Duplicate Day 7 case')
+            raise ValueError('Duplicate seed and schedule case')
         by_case[key] = result
     expected = {*(f'cosine-seed-{seed}' for seed in (1, 2, 3)),
                 'wsd-linear-seed-1', 'wsd-cosine-seed-1'}
@@ -69,7 +70,7 @@ def analyze(results: list[dict]) -> dict:
 def report_markdown(analysis: dict) -> str:
     """Render measured values with the question, uncertainty, and next test."""
     settings = analysis['controlled_settings']
-    lines = ['# Day 7 measured takeaways', '', '## Question', '',
+    lines = [f'# {EXPERIMENT_NAME}', '', '## Question', '',
              'How large is seed variation, and does WSD improve loss relative to cosine at the same budget?', '',
              '## Prediction', '',
              'WSD may remain higher during the stable phase and fall during decay. '

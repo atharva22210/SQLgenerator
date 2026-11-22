@@ -1,4 +1,4 @@
-"""Prove Day 7 schedule, resume, validation, and chart invariants on CPU."""
+"""Check schedule, resume, validation, and chart invariants on CPU."""
 from contextlib import nullcontext
 from dataclasses import asdict, replace
 import io
@@ -21,7 +21,7 @@ from training.tracking import curve_payload, define_metrics, log_update, verify_
 from training.trainer import _evaluate
 from training.config import TrainConfig, checkpoint_config_matches
 from pretraining_experiments.seed_and_schedules.analysis import analyze, report_markdown
-from pretraining_experiments.seed_and_schedules.launch import experiment_plan, main
+from pretraining_experiments.seed_and_schedules.launch import experiment_plan, main, suite_directory
 
 
 class ScheduleTests(unittest.TestCase):
@@ -68,6 +68,17 @@ class ScheduleTests(unittest.TestCase):
             submit.spawn.assert_not_called()
             main(wandb_entity='test', smoke=True)
             self.assertEqual(len(submit.spawn.call_args.args[0]), 1)
+            self.assertRegex(submit.spawn.call_args.args[1], r'^seed-and-schedules-smoke-[0-9a-f]{12}$')
+            self.assertEqual(submit.spawn.call_args.args[3], 'sqlgen-seed-and-schedules')
+
+    def test_suite_directory_resolves_new_and_archived_checkpoints(self):
+        root = Path('/vol/checkpoints/pretraining_experiments')
+        current = 'seed-and-schedules-smoke-0123456789ab'
+        archived = 'day07-smoke-073af7c11d79'
+        self.assertEqual(suite_directory(current), root / 'seed_and_schedules' / current)
+        self.assertEqual(suite_directory(archived), root / 'day07' / archived)
+        with self.assertRaises(ValueError):
+            suite_directory('seed-and-schedules-../another-suite')
 
 
 class ResumeAndValidationTests(unittest.TestCase):
@@ -187,7 +198,7 @@ class TrackingTests(unittest.TestCase):
     def test_offline_sdk_accepts_scalar_axes_and_all_four_charts(self):
         with tempfile.TemporaryDirectory() as temp:
             rows = []
-            with wandb.init(project='sqlgen-day07-local-test', mode='offline', dir=temp,
+            with wandb.init(project='sqlgen-seed-and-schedules-local-test', mode='offline', dir=temp,
                             settings=wandb.Settings(console='off', silent=True)) as run:
                 define_metrics(run)
                 for step in (1, 2):

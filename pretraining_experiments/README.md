@@ -11,9 +11,7 @@ in this package. Python 3.13.15 and the committed `uv.lock` define the environme
 | DDP correctness | [distributed_training/experiment_plan.py](../distributed_training/experiment_plan.py), [commands](../distributed_training/README.md) | [DDP correctness](../distributed_training/ddp_correctness_takeaways.md) |
 | Gradient synchronization | [distributed_training/ddp_core.py](../distributed_training/ddp_core.py), `launch --part b` | [Gradient sync](../distributed_training/gradient_sync_takeaways.md) |
 | Sharding and activation memory | [distributed_training/fsdp_checkpointing.py](../distributed_training/fsdp_checkpointing.py), [commands](../distributed_training/memory-and-sharding.md) | [Memory/sharding](../distributed_training/memory_takeaways.md) |
-| Seed variation | [seed_and_schedules/seed_noise.py](seed_and_schedules/seed_noise.py) | [Seed noise](seed_and_schedules/seed_noise_takeaways.md) |
-| Memory/resume check | [Shared trainer](../training/trainer.py), `--smoke` | [Measured smoke check](seed_and_schedules/smoke_takeaways.md) |
-| Learning-rate schedules | [seed_and_schedules/launch.py](seed_and_schedules/launch.py) | [Schedules](seed_and_schedules/schedules_takeaways.md) |
+| Seed variation and learning-rate schedules | [Schedule launcher](seed_and_schedules/launch.py), [seed cases](seed_and_schedules/seed_noise.py) | [Results and smoke check](seed_and_schedules/takeaways.md) |
 
 Experiment launchers supply settings to [`training/trainer.py`](../training/trainer.py),
 the shared single-GPU loop. The [`training/`](../training/) package also handles
@@ -35,9 +33,9 @@ pretraining_experiments/
     launch.py
     seed_noise.py
     analysis.py
-    seed_noise_takeaways.md
-    schedules_takeaways.md
-    smoke_takeaways.md
+    figures/
+    takeaways.md
+    validation_results.csv
 distributed_training/            # earlier DDP/FSDP experiments
   launch.py
   ddp_worker.py
@@ -45,6 +43,29 @@ distributed_training/            # earlier DDP/FSDP experiments
 ```
 
 Already running Modal jobs continue using the source uploaded when they launched.
+
+## Writing an experiment report
+
+Keep one `takeaways.md` alongside the experiment code. Use the experiment's
+name in the report, plots, and run labels so readers can find the evidence later.
+Start with the main finding once results are available.
+
+```markdown
+# <Experiment name>
+
+## Question and prediction
+## Controlled settings
+## Results and interpretation
+## Limitations and next experiment
+## Sources
+```
+
+Use this outline as a starting point. Give each main observation a heading of its own,
+and add sections for sanity checks, memory, or resume behavior when they help explain
+the evidence. Put a chart beside the observation it supports. Show phases and late-run
+detail when they clarify the comparison, and label smoothing or other transformations.
+Use tables for exact results, including individual seeds and their sample spread.
+Mark unmeasured predictions clearly and link the original runs or data.
 
 ## Batch size and learning-rate scaling
 
@@ -131,14 +152,15 @@ uv run --locked modal run --detach --env main --profile sanika-05 \
 Inspect `tracking-check.json` and open the linked run's `charts/train_lr`,
 `charts/train_loss`, `charts/val_sql_loss`, and `charts/val_english_loss`.
 The API check proves chart data exists; browser rendering still needs inspection.
-The [measured smoke check](seed_and_schedules/smoke_takeaways.md) records the first full-workload run and the verified upload fix.
+The [seed and schedule sanity checks](seed_and_schedules/takeaways.md#sanity-checks)
+cover the full-workload smoke run and the verified upload fix.
 The CPU coordinator verifies fresh uploaded history with bounded backoff after
-GPU work finishes. To recheck an existing suite without retraining:
+GPU work finishes. To recheck an existing suite, set `SUITE_ID` to its printed ID:
 
 ```bash
 uv run --locked modal run --env main --profile sanika-05 \
   -m pretraining_experiments.seed_and_schedules.launch \
-  --verify-suite day07-smoke-073af7c11d79
+  --verify-suite "$SUITE_ID"
 ```
 
 A full sweep is a separate command:
@@ -149,10 +171,11 @@ uv run --locked modal run --detach --env main --profile sanika-05 \
   --wandb-entity dkbsingh7-iit-delhi
 ```
 
-Each submission prints a durable Modal call ID. Outputs are under
-`/vol/checkpoints/pretraining_experiments/day07/<suite>/`: a pinned `plan.json`,
-per-case `settings.json`, `metrics.jsonl`, `result.json`, `latest.pt`, and retained
-snapshots at updates 100, 500 and 800. The smoke equivalents are 1, 5 and 8.
+Each submission prints a durable Modal call ID. New runs use the W&B project
+`sqlgen-seed-and-schedules` by default. The output directory under
+`/vol/checkpoints/pretraining_experiments/seed_and_schedules/<suite>/` contains
+a pinned `plan.json`, per-case `settings.json`, `metrics.jsonl`, `result.json`,
+`latest.pt`, and snapshots at updates 100, 500 and 800. The smoke equivalents are 1, 5 and 8.
 Restoring includes optimizer, CPU/CUDA/sample RNG, dataset identity, and metric
 history, with unchanged schedule configuration. This implementation chooses
 the screenshot's cosine-tail alternative rather than a mid-run decay branch.

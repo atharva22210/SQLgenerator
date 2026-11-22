@@ -55,7 +55,8 @@ class TrainConfig:
         initializer_range: Normal weight standard deviation; default 0.02, as in HF Llama.
             Recorded with the run; applies only when constructing a fresh model.
         validation_seed: Fixed validation draws across training seeds; None retains
-            the historical behavior of using seed. Day 7 sets this explicitly.
+            the historical behavior of using seed. The seed and schedule experiment
+            sets this explicitly.
         wsd_stable_frac/wsd_decay_frac: Fractions of all updates spent at the
             peak and decaying; their lengths plus warmup must equal max_steps.
         wsd_decay_type: Linear or cosine tail, both ending at min_lr.

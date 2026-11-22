@@ -1,4 +1,4 @@
-"""Day 7: seed noise floor and cosine versus warmup–stable–decay schedules.
+"""Compare seed variation and cosine versus warmup–stable–decay schedules.
 
 Each full case uses one A10. The CPU coordinator pins the current published
 Modal dataset and launches five independent workers. --smoke runs ONE ten-update
@@ -11,11 +11,29 @@ import uuid
 
 import modal
 from training.config import DATA_DIR, TrainConfig, image, volume, wandb_secret
+from . import EXPERIMENT_NAME
 from .seed_noise import cosine_cases
 
-app = modal.App('sqlgen-day07-schedules')
-PROJECT = 'sqlgen-day7'
-OUTPUT_ROOT = Path('/vol/checkpoints/pretraining_experiments/day07')
+SUITE_PREFIX = 'seed-and-schedules'
+PROJECT = f'sqlgen-{SUITE_PREFIX}'
+app = modal.App(PROJECT)
+OUTPUT_ROOT = Path('/vol/checkpoints/pretraining_experiments/seed_and_schedules')
+ARCHIVED_OUTPUT_ROOT = OUTPUT_ROOT.with_name('day07')
+
+
+def suite_directory(suite: str) -> Path:
+    """Resolve a printed suite ID to its checkpoint and result directory.
+
+    Older IDs encode the archived directory name. Keep that lookup so the
+    verification command can still read saved histories in place.
+    """
+    archived_prefix = f'{ARCHIVED_OUTPUT_ROOT.name}-'
+    if not suite.startswith((f'{SUITE_PREFIX}-', archived_prefix)) or any(
+        char not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for char in suite
+    ):
+        raise ValueError('Expected a printed seed and schedule suite ID')
+    root = ARCHIVED_OUTPUT_ROOT if suite.startswith(archived_prefix) else OUTPUT_ROOT
+    return root / suite
 
 
 def experiment_plan(*, max_steps: int = 1000, smoke: bool = False) -> list[dict]:
@@ -28,7 +46,7 @@ def experiment_plan(*, max_steps: int = 1000, smoke: bool = False) -> list[dict]
     if smoke:
         max_steps = 10
     if max_steps < 10 or max_steps % 10:
-        raise ValueError('Day 7 max_steps must be a positive multiple of 10')
+        raise ValueError('max_steps must be a positive multiple of 10')
     base = TrainConfig(mode='masked_pack', seq_len=4096, micro_batch_size=8,
                        grad_accum_steps=4, max_steps=max_steps, warmup_steps=max_steps // 10,
                        eval_every=1 if smoke else 50, val_batches=1 if smoke else 128,
@@ -44,8 +62,8 @@ def _train_case(case: dict, suite: str, dataset: dict, entity: str, project: str
     """Train one pinned case; the smoke path proves resume without changing LR."""
     from training.trainer import run_training as _run
     config = TrainConfig(**case['train'])
-    output = OUTPUT_ROOT / suite / case['label']
-    options = dict(output_dir=output, group=suite, title=f'Day 7 · {case["label"]}',
+    output = suite_directory(suite) / case['label']
+    options = dict(output_dir=output, group=suite, title=f'{EXPERIMENT_NAME} · {case["label"]}',
                    expected_dataset=dataset,
                    milestone_updates=(config.warmup_steps, config.max_steps // 2,
                                       config.max_steps * 8 // 10))
@@ -78,7 +96,7 @@ def run_suite(cases: list[dict], suite: str, entity: str, project: str, smoke: b
     from training.dataset import dataset_identity
     volume.reload()
     dataset = dataset_identity(DATA_DIR)
-    root = OUTPUT_ROOT / suite
+    root = suite_directory(suite)
     root.mkdir(parents=True, exist_ok=True)
     (root / 'plan.json').write_text(json.dumps({'cases': cases, 'dataset': dataset}, indent=2))
     volume.commit()
@@ -98,7 +116,7 @@ def run_suite(cases: list[dict], suite: str, entity: str, project: str, smoke: b
         import wandb
         from .analysis import publish_comparison, report_markdown
         with wandb.init(entity=entity, project=project, group=suite,
-                        name='Day 7 · Schedule and seed comparison', job_type='comparison',
+                        name=f'{EXPERIMENT_NAME} · comparison', job_type='comparison',
                         config={'dataset_identity': dataset, 'suite': suite}) as run:
             analysis = publish_comparison(wandb, run, results)
             summary['comparison_url'] = run.url
@@ -114,10 +132,8 @@ def run_suite(cases: list[dict], suite: str, entity: str, project: str, smoke: b
 def recheck_tracking(suite: str) -> dict:
     """Verify an existing suite's saved results without allocating any GPU."""
     from training.tracking import verify_uploaded_result
-    if not suite.startswith('day07-') or any(char not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for char in suite):
-        raise ValueError('Expected a printed Day 7 suite ID')
+    root = suite_directory(suite)
     volume.reload()
-    root = OUTPUT_ROOT / suite
     paths = sorted(root.glob('*/result.json'))
     if not paths:
         raise FileNotFoundError(f'No completed case results under {root}')
@@ -150,15 +166,15 @@ def main(wandb_entity: str = '', wandb_project: str = PROJECT, smoke: bool = Fal
         return
     if not wandb_entity:
         raise ValueError('Supply --wandb-entity for experiment tracking')
-    suite = f'day07-{"smoke" if smoke else "full"}-{uuid.uuid4().hex[:12]}'
+    suite = f'{SUITE_PREFIX}-{"smoke" if smoke else "full"}-{uuid.uuid4().hex[:12]}'
     call = run_suite.spawn(cases, suite, wandb_entity, wandb_project, smoke)
     print(json.dumps({'suite': suite, 'call_id': call.object_id,
-                      'results': str(OUTPUT_ROOT / suite / 'summary.json')}), flush=True)
+                      'results': str(suite_directory(suite) / 'summary.json')}), flush=True)
 
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='Preview Day 7 locally without starting a Modal App.')
+    parser = argparse.ArgumentParser(description='Preview the seed and schedule experiment locally.')
     parser.add_argument('--dry-run', action='store_true', required=True)
     parser.add_argument('--smoke', action='store_true')
     options = parser.parse_args()
