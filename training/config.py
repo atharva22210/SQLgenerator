@@ -27,8 +27,6 @@ image = (
     # wheel. Copy the teaching modules separately for remote imports.
     .add_local_dir(ROOT / "model", "/root/model")
     .add_local_dir(ROOT / "data", "/root/data")
-    .add_local_file(ROOT / "training_common.py", "/root/training_common.py")
-    .add_local_file(ROOT / "train.py", "/root/train.py")
     .add_local_dir(ROOT / "training", "/root/training")
     .add_local_dir(ROOT / "distributed_training", "/root/distributed_training")
     .add_local_dir(ROOT / "pretraining_experiments", "/root/pretraining_experiments")

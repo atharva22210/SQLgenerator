@@ -7,7 +7,7 @@ tokenizer and pretraining corpus are documented in the data preparation code.
 ## Training experiments
 
 - [Pretraining experiments](pretraining_experiments/README.md) organizes the shared loop, Day 7 schedules/seed comparisons, and analytical takeaways.
-- [Sequence packing](packing_experiment/README.md) compares padding, unmasked packing, and masked packing on one GPU. [Packing takeaways](packing_experiment/takeaways.md)
+- [Sequence packing](pretraining_experiments/sequence_packing/README.md) compares padding, unmasked packing, and masked packing on one GPU. [Packing takeaways](pretraining_experiments/sequence_packing/takeaways.md)
 - [Distributed training](distributed_training/README.md) covers DDP correctness and gradient synchronization. [Memory and sharding](distributed_training/memory-and-sharding.md) covers DDP, FSDP, and activation checkpointing on two GPUs. [Distributed training takeaways](distributed_training/takeaways.md)
 
 ## Setup

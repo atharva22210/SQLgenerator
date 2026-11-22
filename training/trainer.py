@@ -1,8 +1,7 @@
 """Shared single-GPU data → loss → update loop, independent of experiment launchers.
 
 Experiment modules import run_training and supply a TrainConfig plus output and
-tracking settings. This file owns the optimization loop; training/ holds its
-reusable support functions. Launch a particular experiment from its launch.py.
+tracking settings. Launch a particular experiment from its launch.py.
 """
 from __future__ import annotations
 from dataclasses import asdict

@@ -143,7 +143,7 @@ class DDPPartsTests(unittest.TestCase):
         from types import SimpleNamespace
         import numpy as np
         from distributed_training.sql_validation import evaluate_sql
-        from training_common import TrainConfig
+        from training.config import TrainConfig
         source = SimpleNamespace(tokens=np.array([7, 9, 2, 3, 9]),
                                  ends=np.array([1, 4]), eligible_indices=np.array([1]))
         corpus = SimpleNamespace(sql=[source])  # Deliberately has no English reader.

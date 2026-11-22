@@ -9,7 +9,7 @@ from torch import nn
 
 from distributed_training.experiment_plan import experiment_plan
 from model.transformer_35m import RMSNorm, Transformer, TransformerConfig
-from training_common import TrainConfig, checkpoint_config_matches
+from training.config import TrainConfig, checkpoint_config_matches
 
 
 def make_model(initializer_range=0.02, *, seed=42):
@@ -110,19 +110,19 @@ class InitializationLaunchTests(unittest.TestCase):
             self.assertTrue(all(case["train"]["initializer_range"] == .02 for case in experiment_plan(part)))
 
     def test_launchers_pass_scale_to_workers_without_launching_gpus(self):
-        from packing_experiment import train
+        from pretraining_experiments.sequence_packing import launch as packing
         from distributed_training import launch
 
         call = SimpleNamespace(object_id="fc-test", get=Mock())
-        with patch.object(train.train_on_gpu, "spawn", return_value=call) as spawn, patch("builtins.print"):
-            train.main(wandb_entity="test", initializer_range=.01)
+        with patch.object(packing.train_on_gpu, "spawn", return_value=call) as spawn, patch("builtins.print"):
+            packing.main(wandb_entity="test", initializer_range=.01)
             self.assertEqual(spawn.call_args.args[0]["initializer_range"], .01)
             self.assertTrue(spawn.call_args.args[3].endswith("-init-std0.01"))
             call.get.assert_not_called()
         with patch.object(launch.run_suite, "spawn", return_value=call) as spawn, patch("builtins.print"):
             launch.main(part="ab", wandb_entity="test", initializer_range=.01)
             self.assertTrue(all(case["train"]["initializer_range"] == .01 for case in spawn.call_args.args[0]))
-        for entrypoint, remote in ((train.main, train.train_on_gpu), (launch.main, launch.run_suite)):
+        for entrypoint, remote in ((packing.main, packing.train_on_gpu), (launch.main, launch.run_suite)):
             with patch.object(remote, "spawn") as spawn:
                 with self.assertRaisesRegex(ValueError, "initializer_range"):
                     entrypoint(wandb_entity="test", initializer_range=-1)

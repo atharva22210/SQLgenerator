@@ -64,7 +64,7 @@ classified as divergence. No LR or batch is automatically reduced.
 - `launch.py`: explicit submission, bounded concurrency and persistent results.
 - `analysis.py`: matched-budget checks, best-tested LR selection and plots.
 - `takeaways.md`: question, predictions, results status, limitations and next test.
-- [`../../train.py`](../../train.py): the single shared GPU optimization loop.
+- [`../../training/trainer.py`](../../training/trainer.py): the single shared GPU optimization loop.
 
 ## Preview now, launch later
 

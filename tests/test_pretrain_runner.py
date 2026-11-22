@@ -4,13 +4,13 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from packing_experiment.train import TrainConfig, main
+from pretraining_experiments.sequence_packing.launch import TrainConfig, main
 
 
 class PretrainSubmissionTests(unittest.TestCase):
     def test_default_submission_exits_without_waiting(self) -> None:
         call = SimpleNamespace(object_id="fc-test", get=Mock())
-        with patch("packing_experiment.train.train_on_gpu.spawn", return_value=call) as spawn, \
+        with patch("pretraining_experiments.sequence_packing.launch.train_on_gpu.spawn", return_value=call) as spawn, \
              patch("builtins.print"):
             main(wandb_entity="test-team")
         call.get.assert_not_called()
@@ -23,13 +23,13 @@ class PretrainSubmissionTests(unittest.TestCase):
 
     def test_optional_wait_gets_spawned_result(self) -> None:
         call = SimpleNamespace(object_id="fc-test", get=Mock(return_value={"updates": 2}))
-        with patch("packing_experiment.train.train_on_gpu.spawn", return_value=call), \
+        with patch("pretraining_experiments.sequence_packing.launch.train_on_gpu.spawn", return_value=call), \
              patch("builtins.print"):
             main(wandb_entity="test-team", wait=True)
         call.get.assert_called_once_with()
 
     def test_invalid_run_is_rejected_before_submission(self) -> None:
-        with patch("packing_experiment.train.train_on_gpu.spawn") as spawn:
+        with patch("pretraining_experiments.sequence_packing.launch.train_on_gpu.spawn") as spawn:
             with self.assertRaisesRegex(ValueError, "run_name"):
                 main(wandb_entity="test-team", run_name="../another-run")
         spawn.assert_not_called()

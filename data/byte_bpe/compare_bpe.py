@@ -9,7 +9,7 @@ import modal
 from data.byte_bpe.train_byte_bpe import documents, decode, fit_bpe, settings
 from data.grouped_corpus import resolve_grouped_sql
 from data.prepare_pretrain_data import OUTPUT_PATH as DATA_DIR, find_tokenizer_path
-from training_common import volume
+from training.config import volume
 
 app = modal.App("sqlgen-compare-bpe")
 

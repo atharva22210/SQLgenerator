@@ -1,7 +1,7 @@
 """Preview or explicitly launch a fixed-token batch-size × learning-rate sweep.
 
 Importing this file and the default local preview never submit training. The
-shared top-level train.py remains the only single-GPU optimization loop.
+shared training.trainer module runs single-GPU optimization.
 """
 import argparse
 import json
@@ -25,7 +25,7 @@ def execute_case(case: dict, suite: str, dataset: dict, entity: str, project: st
     Treating every exception as an unstable LR would hide infrastructure bugs.
     A failed case keeps its last valid checkpoint and the exact failure update.
     """
-    from train import run_training
+    from training.trainer import run_training
     output = OUTPUT_ROOT / suite / case['label']
     output.mkdir(parents=True, exist_ok=True)
     config = TrainConfig(**case['train'])

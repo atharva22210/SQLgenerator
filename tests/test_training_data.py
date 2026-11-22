@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from data.dataloader import DocumentFile, SQL_SOURCES, make_batch
-from training_common import TrainConfig, learning_rate, _validate_corpus_files
+from training.config import TrainConfig, learning_rate, _validate_corpus_files
 
 
 class FixedCorpus:
