@@ -7,6 +7,7 @@ in this package. Python 3.13.15 and the committed `uv.lock` define the environme
 
 | Experiment | Code / execution guide | Analytical takeaways |
 | --- | --- | --- |
+| Optimizer, batch size, and peak LR | [Design and commands](optimizer_batch_lr/README.md) | [Takeaways](optimizer_batch_lr/takeaways.md) |
 | Sequence packing | [sequence_packing/launch.py](sequence_packing/launch.py), [commands](sequence_packing/README.md) | [Packing](sequence_packing/takeaways.md) |
 | DDP correctness | [distributed_training/experiment_plan.py](../distributed_training/experiment_plan.py), [commands](../distributed_training/README.md) | [DDP correctness](../distributed_training/ddp_correctness_takeaways.md) |
 | Gradient synchronization | [distributed_training/ddp_core.py](../distributed_training/ddp_core.py), `launch --part b` | [Gradient sync](../distributed_training/gradient_sync_takeaways.md) |

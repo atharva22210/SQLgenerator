@@ -59,6 +59,8 @@ class TrainConfig:
             sets this explicitly.
         wsd_stable_frac/wsd_decay_frac: Fractions of all updates spent at the
             peak and decaying; their lengths plus warmup must equal max_steps.
+        optimizer: adamw, momentum_sgd, or muon on hidden matrices.
+        companion_peak_lr: AdamW peak for embeddings and norms when using Muon.
         wsd_decay_type: Linear or cosine tail, both ending at min_lr.
     """
 
@@ -84,10 +86,17 @@ class TrainConfig:
     wsd_decay_frac: float = 0.2
     wsd_decay_type: str = "linear"
 
+    optimizer: str = "adamw"
+    companion_peak_lr: float = 6e-4
+
     def __post_init__(self) -> None:
         if (isinstance(self.initializer_range, bool)
                 or not math.isfinite(self.initializer_range) or self.initializer_range <= 0):
             raise ValueError("initializer_range must be finite and positive")
+        if self.optimizer not in {"adamw", "momentum_sgd", "muon"}:
+            raise ValueError("Unknown optimizer")
+        if not math.isfinite(self.companion_peak_lr) or self.companion_peak_lr <= 0:
+            raise ValueError("companion_peak_lr must be finite and positive")
         if self.mode not in {"pad", "naive_pack", "masked_pack"}:
             raise ValueError("mode must be pad, naive_pack, or masked_pack")
         if self.lr_schedule not in {"cosine", "inverse_sqrt", "wsd"}:
@@ -120,7 +129,7 @@ def checkpoint_config_matches(saved: dict, current: TrainConfig) -> bool:
     Only fields introduced after the original runs receive defaults; existing
     batch, optimizer, seed and corpus choices must still match exactly.
     """
-    legacy_defaults = {"initializer_range": 0.02, "validation_seed": None,
+    legacy_defaults = {"optimizer": "adamw", "companion_peak_lr": 6e-4, "initializer_range": 0.02, "validation_seed": None,
                        "wsd_stable_frac": 0.7, "wsd_decay_frac": 0.2, "wsd_decay_type": "linear"}
     return {**legacy_defaults, **saved} == asdict(current)
 
