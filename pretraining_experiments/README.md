@@ -7,11 +7,14 @@ in this package. Python 3.13.15 and the committed `uv.lock` define the environme
 
 | Experiment | Code / execution guide | Analytical takeaways |
 | --- | --- | --- |
+| Optimizer, batch size, and peak LR | [Design and commands](optimizer_batch_lr/README.md) | [Takeaways](optimizer_batch_lr/takeaways.md) |
 | Sequence packing | [sequence_packing/launch.py](sequence_packing/launch.py), [commands](sequence_packing/README.md) | [Packing](sequence_packing/takeaways.md) |
 | DDP correctness | [distributed_training/experiment_plan.py](../distributed_training/experiment_plan.py), [commands](../distributed_training/README.md) | [DDP correctness](../distributed_training/ddp_correctness_takeaways.md) |
 | Gradient synchronization | [distributed_training/ddp_core.py](../distributed_training/ddp_core.py), `launch --part b` | [Gradient sync](../distributed_training/gradient_sync_takeaways.md) |
 | Sharding and activation memory | [distributed_training/fsdp_checkpointing.py](../distributed_training/fsdp_checkpointing.py), [commands](../distributed_training/memory-and-sharding.md) | [Memory/sharding](../distributed_training/memory_takeaways.md) |
 | Seed variation and learning-rate schedules | [Schedule launcher](seed_and_schedules/launch.py), [seed cases](seed_and_schedules/seed_noise.py) | [Results and smoke check](seed_and_schedules/takeaways.md) |
+
+After training, use the [held-out SQL generation evaluator](sql_generation_eval/README.md) to export checkpoint predictions for judging.
 
 Experiment launchers supply settings to [`training/trainer.py`](../training/trainer.py),
 the shared single-GPU loop. The [`training/`](../training/) package also handles

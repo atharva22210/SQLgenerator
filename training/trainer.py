@@ -78,6 +78,7 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
     import torch
     import wandb
     from data.dataloader import make_batch
+    from training.optimizers import build_optimizer
     from model.transformer_35m import Transformer, TransformerConfig
 
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
@@ -108,17 +109,13 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
     model = Transformer(TransformerConfig(vocab_size=len(tokenizer), max_seq_len=config.seq_len,
                                         initializer_range=config.initializer_range)).to(device)
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
-    decay = [p for p in model.parameters() if p.ndim >= 2]
-    no_decay = [p for p in model.parameters() if p.ndim < 2]
-    optimizer = torch.optim.AdamW(
-        [{'params': decay, 'weight_decay': config.weight_decay},
-         {'params': no_decay, 'weight_decay': 0.0}],
-        lr=config.peak_lr, betas=(.9, .95), eps=1e-8, fused=True)
+    optimizer = build_optimizer(model, config)
     start_update, cumulative_tokens, wandb_id, history = 0, 0, uuid.uuid4().hex, []
     if state:
         restore_checkpoint(state, model, optimizer, config, rng)
-        for param_group in optimizer.param_groups:
-            param_group['fused'] = True
+        if config.optimizer == 'adamw':  # Older checkpoints may predate fused AdamW.
+            for param_group in optimizer.param_groups:
+                param_group['fused'] = True
         start_update, cumulative_tokens = state['update'], state['cumulative_tokens']
         wandb_id, history = state['wandb_id'], state.get('history', [])
     del state  # CPU checkpoint tensors need not remain live during training.
@@ -143,7 +140,7 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
             started = time.perf_counter()
             lr = learning_rate(update, config)
             for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
+                param_group['lr'] = lr * param_group.get('lr_scale', 1.0)
             optimizer.zero_grad(set_to_none=True)
             batches = [make_batch(train, mode=config.mode, batch_size=config.micro_batch_size,
                                   seq_len=config.seq_len, sql_fraction=config.sql_fraction,
@@ -187,6 +184,8 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
                        'perf/cumulative_non_pad_tokens': cumulative_tokens,
                        'perf/peak_allocated_gib': torch.cuda.max_memory_allocated() / 1024**3,
                        'perf/peak_reserved_gib': torch.cuda.max_memory_reserved() / 1024**3}
+            if config.optimizer == 'muon':
+                metrics['train/companion_lr'] = optimizer.adamw.param_groups[0]['lr']
             evaluate = update % config.eval_every == 0 or update == final_update
             if evaluate:
                 metrics.update(_evaluate(model, validation, config, tokenizer.pad_token_id, device))
