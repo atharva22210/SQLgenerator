@@ -217,3 +217,10 @@ Tests cover WSD phase boundaries, fixed validation across training seeds,
 unchanged experiment settings, exact CPU checkpoint replay, real offline W&B
 chart serialization, missing uploaded-history rejection, controlled analysis,
 and compatibility with earlier launch commands. No test submits training GPUs.
+
+## Warmup duration follow-up
+
+The seed/schedule experiment also has a prepared [300-update warmup comparison](seed_and_schedules/warmup_takeaways.md).
+It reuses the completed 100-update baselines and adds only two seed-1 runs:
+cosine and WSD linear. It has not been launched. WSD uses 300 warmup, 500 stable,
+and 200 decay updates, preserving the 1000-update / 131.072M-token budget.
