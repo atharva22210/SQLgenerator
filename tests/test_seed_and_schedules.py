@@ -212,6 +212,7 @@ class TrackingTests(unittest.TestCase):
     def test_public_api_check_rejects_missing_history_or_charts(self):
         api, remote = Mock(), Mock()
         api.run.return_value = remote
+        remote.config = {}
         remote.scan_history.return_value = [{'optimizer_update': i, 'train/lr': .001, 'train/loss': 1.,
                                              'val/sql_loss': 2., 'val/english_loss': 3.} for i in (1, 2)]
         remote.scan_history.return_value.append({'optimizer_update': None, 'train/lr': None,

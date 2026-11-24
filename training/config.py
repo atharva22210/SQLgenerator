@@ -59,7 +59,8 @@ class TrainConfig:
             sets this explicitly.
         wsd_stable_frac/wsd_decay_frac: Fractions of all updates spent at the
             peak and decaying; their lengths plus warmup must equal max_steps.
-        optimizer: adamw, momentum_sgd, or muon on hidden matrices.
+        optimizer: adamw, plain sgd, momentum_sgd, or muon on hidden matrices.
+        grad_clip: Maximum accumulated gradient norm before the optimizer update.
         companion_peak_lr: AdamW peak for embeddings and norms when using Muon.
         wsd_decay_type: Linear or cosine tail, both ending at min_lr.
     """
@@ -93,7 +94,7 @@ class TrainConfig:
         if (isinstance(self.initializer_range, bool)
                 or not math.isfinite(self.initializer_range) or self.initializer_range <= 0):
             raise ValueError("initializer_range must be finite and positive")
-        if self.optimizer not in {"adamw", "momentum_sgd", "muon"}:
+        if self.optimizer not in {"adamw", "sgd", "momentum_sgd", "muon"}:
             raise ValueError("Unknown optimizer")
         if not math.isfinite(self.companion_peak_lr) or self.companion_peak_lr <= 0:
             raise ValueError("companion_peak_lr must be finite and positive")
@@ -114,7 +115,8 @@ class TrainConfig:
             raise ValueError("Batch sizes, lengths, and step counts must be positive")
         if not 0 <= self.warmup_steps <= self.max_steps:
             raise ValueError("warmup_steps must be between 0 and max_steps")
-        if not 0 < self.min_lr <= self.peak_lr or self.weight_decay < 0 or self.grad_clip <= 0:
+        if (not 0 < self.min_lr <= self.peak_lr or self.weight_decay < 0
+                or not math.isfinite(self.grad_clip) or self.grad_clip <= 0):
             raise ValueError("Learning rates, weight decay, or gradient clip are invalid")
         if self.lr_schedule == "wsd":
             from .schedules import wsd_boundaries

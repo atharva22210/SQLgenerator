@@ -78,7 +78,7 @@ def report_markdown(summary: dict) -> str:
     lines += ['', 'Compare the best-loss curve across batches and the LR curves within each batch. '
               'An interior minimum is more informative than a winner at a grid boundary. '
               'A boundary winner may simply mean the LR search range is too narrow.', '',
-              '## Limitations', '', 'One seed per case; four LRs per batch; one reused validation sample. '
+              '## Limitations', '', 'One seed per case; a limited LR grid; one reused validation sample. '
               'The best tested point is not the true optimum. Any apparent critical-batch knee is a region '
               'to investigate, not an exact universal constant. Gradient accumulation changes update '
               'frequency without adding GPUs. Actual predicted-target counts differ from input tokens. '
@@ -94,7 +94,7 @@ def report_markdown(summary: dict) -> str:
 def publish(wandb, run, cases: list[dict], results: list[dict]) -> dict:
     """Plot LR/batch tradeoffs and sparse full validation curves on a token axis.
 
-    Each case has <=8000 raw points. Across 16 cases, training curves exceed
+    Each case has <=1000 raw points. Bound overview tables so future larger grids cannot exceed
     W&B's default table size: sample up to 401 points/case for overview plots.
     All validation points and original numeric histories remain unchanged.
     """

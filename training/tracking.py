@@ -13,7 +13,7 @@ def define_metrics(run, step_metric: str = 'optimizer_update') -> None:
     run.define_metric('completed_updates', hidden=True)
     if step_metric != 'optimizer_update':
         run.define_metric(step_metric, hidden=True)
-    for namespace in ('train', 'val', 'data', 'perf'):
+    for namespace in ('train', 'val', 'data', 'perf', 'probe'):
         run.define_metric(f'{namespace}/*', step_metric=step_metric)
 
 
@@ -46,6 +46,13 @@ def curve_payload(wandb, histories: list[list[dict]], names: list[str], *,
             xs=[[row[x_key] for row in rows] for rows in series],
             ys=[[row[metric] for row in rows] for rows in series],
             keys=names, title=title, xname='Optimizer update' if x_key == 'optimizer_update' else 'Non-padding training tokens')
+    if all(any('probe/fixed_loss' in row for row in rows) for rows in histories):
+        series = [[row for row in rows if 'probe/fixed_loss' in row] for rows in histories]
+        plots['charts/fixed_probe_loss'] = wandb.plot.line_series(
+            xs=[[row[x_key] for row in rows] for rows in series],
+            ys=[[row['probe/fixed_loss'] for row in rows] for rows in series],
+            keys=names, title='Fixed training-batch loss (post-update)',
+            xname='Optimizer update' if x_key == 'optimizer_update' else 'Non-padding training tokens')
     return plots
 
 
@@ -75,6 +82,16 @@ def verify_history(api, run_path: str, expected_updates: list[int], expected_eva
         table = run.summary.get(key)
         if table is None or table.get('nrows') != expected_count or table.get('ncols') != 3:
             raise RuntimeError(f'Uploaded chart table missing or incomplete: {key}')
+    every = run.config.get('probe_recipe', {}).get('every', 0)
+    if every:
+        expected = [u for u in expected_updates if u == 1 or u % every == 0 or u == expected_updates[-1]]
+        matching = [row for row in rows if row.get('probe/fixed_loss') is not None]
+        if (sorted({int(row['optimizer_update']) for row in matching}) != expected
+                or any(not math.isfinite(row['probe/fixed_loss']) for row in matching)):
+            raise RuntimeError('Uploaded fixed-probe history incomplete')
+        table = run.summary.get('charts/fixed_probe_loss_table')
+        if table is None or table.get('nrows') != len(expected):
+            raise RuntimeError('Uploaded fixed-probe chart table incomplete')
     return {'scalar_history_verified': True, 'chart_tables_verified': True, 'wandb_url': run.url}
 
 

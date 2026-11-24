@@ -7,6 +7,9 @@ in this package. Python 3.13.15 and the committed `uv.lock` define the environme
 
 | Experiment | Code / execution guide | Analytical takeaways |
 | --- | --- | --- |
+| Loss landscape and checkpoint branches | [Design and commands](loss_landscape/README.md) | [Takeaways](loss_landscape/takeaways.md) |
+| Plain SGD: smaller batches and stability | [Design and commands](sgd_stability/README.md) | [Takeaways](sgd_stability/takeaways.md) |
+| Batch size and LR: six-run quarter-budget screen | [Design and commands](batch_lr_scaling/README.md) | [Takeaways](batch_lr_scaling/takeaways.md) |
 | Optimizer, batch size, and peak LR | [Design and commands](optimizer_batch_lr/README.md) | [Takeaways](optimizer_batch_lr/takeaways.md) |
 | Sequence packing | [sequence_packing/launch.py](sequence_packing/launch.py), [commands](sequence_packing/README.md) | [Packing](sequence_packing/takeaways.md) |
 | DDP correctness | [distributed_training/experiment_plan.py](../distributed_training/experiment_plan.py), [commands](../distributed_training/README.md) | [DDP correctness](../distributed_training/ddp_correctness_takeaways.md) |

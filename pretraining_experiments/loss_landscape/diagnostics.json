@@ -1,0 +1,632 @@
+[
+  {
+    "label": "lr-0.1-early",
+    "peak_lr": 0.1,
+    "phase": "early",
+    "update": 500,
+    "checkpoint": "/vol/checkpoints/pretraining_experiments/sgd_stability/sgd-stability-87b9a2c0cec8/sgd-batch-16384-lr-0.1/step-000500.pt",
+    "tokens_seen": 8192000,
+    "actual_lr": 0.09397114317029975,
+    "dataset_identity": {
+      "manifest_sha256": "914bb1a0fe4adfc52f474a5f4dccea636b16242ffdc0b2cfa14a02adab54501d",
+      "corpus_id": "ff43d7752a904b649fad5b2d2dbb4df3",
+      "sql_dir": "/vol/bpe_tokenization/pretrain_data",
+      "tokenizer_sha256": "05b8bb66ea18f8328e785424de06fd6653c9147a7dbe686a4dd1627e224e85a1",
+      "vocab_size": 32768,
+      "token_counts": {
+        "english_train": 9238968483,
+        "english_val": 1026673344,
+        "sql_train": 7830836989,
+        "sql_val": 610246589
+      }
+    },
+    "probe_targets": [
+      1255,
+      77
+    ],
+    "precision": "FP32 parameters and math SDPA; TF32 disabled",
+    "slice": {
+      "direction_norm": 0.09481643792018243,
+      "points": [
+        {
+          "alpha": -0.08,
+          "loss": 8.169783592224121
+        },
+        {
+          "alpha": -0.04,
+          "loss": 8.165214538574219
+        },
+        {
+          "alpha": -0.02,
+          "loss": 8.16696548461914
+        },
+        {
+          "alpha": -0.01,
+          "loss": 8.168603897094727
+        },
+        {
+          "alpha": 0.0,
+          "loss": 8.170673370361328
+        },
+        {
+          "alpha": 0.01,
+          "loss": 8.173120498657227
+        },
+        {
+          "alpha": 0.02,
+          "loss": 8.175896644592285
+        },
+        {
+          "alpha": 0.04,
+          "loss": 8.182272911071777
+        },
+        {
+          "alpha": 0.08,
+          "loss": 8.197504043579102
+        }
+      ],
+      "curvatures": [
+        {
+          "epsilon": 0.01,
+          "kappa": 3.77655029296875,
+          "second_difference": 0.000377655029296875
+        },
+        {
+          "epsilon": 0.02,
+          "kappa": 3.788471221923828,
+          "second_difference": 0.0015153884887695312
+        }
+      ]
+    },
+    "hessian": {
+      "dominant_eigenvalue_estimate": -1819.7142333984375,
+      "lambda_max_estimate": 121.68621063232422,
+      "positive_dominant": false,
+      "converged_residual_5pct": true,
+      "relative_residual": 1.85287746035101e-07,
+      "iterations": [
+        {
+          "iteration": 1,
+          "rayleigh": 0.0002592363453004509,
+          "relative_residual": 0.9999995231628418
+        },
+        {
+          "iteration": 2,
+          "rayleigh": -1365.353759765625,
+          "relative_residual": 0.5004661083221436
+        },
+        {
+          "iteration": 3,
+          "rayleigh": -1819.1634521484375,
+          "relative_residual": 0.01648321934044361
+        },
+        {
+          "iteration": 4,
+          "rayleigh": -1819.7015380859375,
+          "relative_residual": 0.0023717323783785105
+        },
+        {
+          "iteration": 5,
+          "rayleigh": -1819.713623046875,
+          "relative_residual": 0.0004236049426253885
+        },
+        {
+          "iteration": 6,
+          "rayleigh": -1819.7142333984375,
+          "relative_residual": 7.788705261191353e-05
+        },
+        {
+          "iteration": 7,
+          "rayleigh": -1819.71435546875,
+          "relative_residual": 1.439148218196351e-05
+        },
+        {
+          "iteration": 8,
+          "rayleigh": -1819.7142333984375,
+          "relative_residual": 2.676421900105197e-06
+        },
+        {
+          "iteration": 9,
+          "rayleigh": -1819.7142333984375,
+          "relative_residual": 5.098208362142032e-07
+        },
+        {
+          "iteration": 10,
+          "rayleigh": -1819.714111328125,
+          "relative_residual": 1.3923556707595708e-07
+        },
+        {
+          "iteration": 11,
+          "rayleigh": -1819.71435546875,
+          "relative_residual": 1.9589622013427288e-07
+        },
+        {
+          "iteration": 12,
+          "rayleigh": -1819.7142333984375,
+          "relative_residual": 1.85287746035101e-07
+        }
+      ],
+      "scope": "Fixed training probe, data-loss Hessian; no optimizer, clipping or decay Jacobian.",
+      "lanczos": {
+        "lambda_max_estimate": 121.68621063232422,
+        "relative_residual": 0.014959769323468208,
+        "converged_residual_5pct": true,
+        "steps": 12,
+        "ritz_spectrum": [
+          -1819.7128405206622,
+          -341.1083645729987,
+          -312.3739369443972,
+          -135.71568658474703,
+          -52.48109139855423,
+          -12.895326353114898,
+          -0.003305103011839704,
+          1.5594085611529889,
+          17.974684131912248,
+          51.676203504725635,
+          81.31103221285342,
+          121.68614660926157
+        ],
+        "method": "Symmetric Lanczos, full reorthogonalization, one residual HVP"
+      },
+      "positive_estimate_relative_residual": 0.014959769323468208
+    },
+    "lr_times_curvature": 11.434992321181392,
+    "epsilon_relative_disagreement": 0.0031466331025802393
+  },
+  {
+    "label": "lr-0.1-late",
+    "peak_lr": 0.1,
+    "phase": "late",
+    "update": 2000,
+    "checkpoint": "/vol/checkpoints/pretraining_experiments/sgd_stability/sgd-stability-87b9a2c0cec8/sgd-batch-16384-lr-0.1/step-002000.pt",
+    "tokens_seen": 32768000,
+    "actual_lr": 0.010000000000000002,
+    "dataset_identity": {
+      "manifest_sha256": "914bb1a0fe4adfc52f474a5f4dccea636b16242ffdc0b2cfa14a02adab54501d",
+      "corpus_id": "ff43d7752a904b649fad5b2d2dbb4df3",
+      "sql_dir": "/vol/bpe_tokenization/pretrain_data",
+      "tokenizer_sha256": "05b8bb66ea18f8328e785424de06fd6653c9147a7dbe686a4dd1627e224e85a1",
+      "vocab_size": 32768,
+      "token_counts": {
+        "english_train": 9238968483,
+        "english_val": 1026673344,
+        "sql_train": 7830836989,
+        "sql_val": 610246589
+      }
+    },
+    "probe_targets": [
+      1255,
+      77
+    ],
+    "precision": "FP32 parameters and math SDPA; TF32 disabled",
+    "slice": {
+      "direction_norm": 0.009884862615936114,
+      "points": [
+        {
+          "alpha": -0.08,
+          "loss": 8.20948314666748
+        },
+        {
+          "alpha": -0.04,
+          "loss": 7.722858428955078
+        },
+        {
+          "alpha": -0.02,
+          "loss": 7.57044792175293
+        },
+        {
+          "alpha": -0.01,
+          "loss": 7.5378570556640625
+        },
+        {
+          "alpha": 0.0,
+          "loss": 7.5359320640563965
+        },
+        {
+          "alpha": 0.01,
+          "loss": 7.5649518966674805
+        },
+        {
+          "alpha": 0.02,
+          "loss": 7.62627649307251
+        },
+        {
+          "alpha": 0.04,
+          "loss": 7.849475383758545
+        },
+        {
+          "alpha": 0.08,
+          "loss": 8.596391677856445
+        }
+      ],
+      "curvatures": [
+        {
+          "epsilon": 0.01,
+          "kappa": 309.4482421875,
+          "second_difference": 0.03094482421875
+        },
+        {
+          "epsilon": 0.02,
+          "kappa": 312.1507167816162,
+          "second_difference": 0.12486028671264648
+        }
+      ]
+    },
+    "hessian": {
+      "dominant_eigenvalue_estimate": 1253.4638671875,
+      "lambda_max_estimate": 1253.4638671875,
+      "positive_dominant": true,
+      "converged_residual_5pct": true,
+      "relative_residual": 1.9579008949222043e-05,
+      "iterations": [
+        {
+          "iteration": 1,
+          "rayleigh": 0.0011347031686455011,
+          "relative_residual": 0.9999971389770508
+        },
+        {
+          "iteration": 2,
+          "rayleigh": 369.9103698730469,
+          "relative_residual": 0.8266811966896057
+        },
+        {
+          "iteration": 3,
+          "rayleigh": 1229.0601806640625,
+          "relative_residual": 0.11742343753576279
+        },
+        {
+          "iteration": 4,
+          "rayleigh": 1250.878662109375,
+          "relative_residual": 0.037026211619377136
+        },
+        {
+          "iteration": 5,
+          "rayleigh": 1253.1429443359375,
+          "relative_residual": 0.012945147231221199
+        },
+        {
+          "iteration": 6,
+          "rayleigh": 1253.422119140625,
+          "relative_residual": 0.004648189526051283
+        },
+        {
+          "iteration": 7,
+          "rayleigh": 1253.4586181640625,
+          "relative_residual": 0.00171419489197433
+        },
+        {
+          "iteration": 8,
+          "rayleigh": 1253.4635009765625,
+          "relative_residual": 0.0006526908255182207
+        },
+        {
+          "iteration": 9,
+          "rayleigh": 1253.464111328125,
+          "relative_residual": 0.00025780039140954614
+        },
+        {
+          "iteration": 10,
+          "rayleigh": 1253.4642333984375,
+          "relative_residual": 0.00010573361942078918
+        },
+        {
+          "iteration": 11,
+          "rayleigh": 1253.464111328125,
+          "relative_residual": 4.487655678531155e-05
+        },
+        {
+          "iteration": 12,
+          "rayleigh": 1253.4638671875,
+          "relative_residual": 1.9579008949222043e-05
+        }
+      ],
+      "scope": "Fixed training probe, data-loss Hessian; no optimizer, clipping or decay Jacobian."
+    },
+    "lr_times_curvature": 12.534638671875003,
+    "epsilon_relative_disagreement": 0.008657595350027306
+  },
+  {
+    "label": "lr-0.3-early",
+    "peak_lr": 0.3,
+    "phase": "early",
+    "update": 500,
+    "checkpoint": "/vol/checkpoints/pretraining_experiments/sgd_stability/sgd-stability-87b9a2c0cec8/sgd-batch-16384-lr-0.3/step-000500.pt",
+    "tokens_seen": 8192000,
+    "actual_lr": 0.28191342951089926,
+    "dataset_identity": {
+      "manifest_sha256": "914bb1a0fe4adfc52f474a5f4dccea636b16242ffdc0b2cfa14a02adab54501d",
+      "corpus_id": "ff43d7752a904b649fad5b2d2dbb4df3",
+      "sql_dir": "/vol/bpe_tokenization/pretrain_data",
+      "tokenizer_sha256": "05b8bb66ea18f8328e785424de06fd6653c9147a7dbe686a4dd1627e224e85a1",
+      "vocab_size": 32768,
+      "token_counts": {
+        "english_train": 9238968483,
+        "english_val": 1026673344,
+        "sql_train": 7830836989,
+        "sql_val": 610246589
+      }
+    },
+    "probe_targets": [
+      1255,
+      77
+    ],
+    "precision": "FP32 parameters and math SDPA; TF32 disabled",
+    "slice": {
+      "direction_norm": 0.28637720800581384,
+      "points": [
+        {
+          "alpha": -0.08,
+          "loss": 8.432379722595215
+        },
+        {
+          "alpha": -0.04,
+          "loss": 8.520686149597168
+        },
+        {
+          "alpha": -0.02,
+          "loss": 8.565364837646484
+        },
+        {
+          "alpha": -0.01,
+          "loss": 8.587776184082031
+        },
+        {
+          "alpha": 0.0,
+          "loss": 8.610219955444336
+        },
+        {
+          "alpha": 0.01,
+          "loss": 8.632688522338867
+        },
+        {
+          "alpha": 0.02,
+          "loss": 8.655179977416992
+        },
+        {
+          "alpha": 0.04,
+          "loss": 8.700260162353516
+        },
+        {
+          "alpha": 0.08,
+          "loss": 8.791459083557129
+        }
+      ],
+      "curvatures": [
+        {
+          "epsilon": 0.01,
+          "kappa": 0.247955322265625,
+          "second_difference": 2.47955322265625e-05
+        },
+        {
+          "epsilon": 0.02,
+          "kappa": 0.26226043701171875,
+          "second_difference": 0.0001049041748046875
+        }
+      ]
+    },
+    "hessian": {
+      "dominant_eigenvalue_estimate": 140.97100830078125,
+      "lambda_max_estimate": 140.97100830078125,
+      "positive_dominant": true,
+      "converged_residual_5pct": true,
+      "relative_residual": 1.9796876586042345e-05,
+      "iterations": [
+        {
+          "iteration": 1,
+          "rayleigh": 0.00038348266389220953,
+          "relative_residual": 0.9999992251396179
+        },
+        {
+          "iteration": 2,
+          "rayleigh": 1.3882560729980469,
+          "relative_residual": 0.9993162155151367
+        },
+        {
+          "iteration": 3,
+          "rayleigh": 13.68227481842041,
+          "relative_residual": 0.9705663323402405
+        },
+        {
+          "iteration": 4,
+          "rayleigh": 87.22843933105469,
+          "relative_residual": 0.6396913528442383
+        },
+        {
+          "iteration": 5,
+          "rayleigh": 135.2034149169922,
+          "relative_residual": 0.21006515622138977
+        },
+        {
+          "iteration": 6,
+          "rayleigh": 140.55172729492188,
+          "relative_residual": 0.056666672229766846
+        },
+        {
+          "iteration": 7,
+          "rayleigh": 140.94151306152344,
+          "relative_residual": 0.015033354051411152
+        },
+        {
+          "iteration": 8,
+          "rayleigh": 140.9689483642578,
+          "relative_residual": 0.003986334428191185
+        },
+        {
+          "iteration": 9,
+          "rayleigh": 140.97085571289062,
+          "relative_residual": 0.0010575596243143082
+        },
+        {
+          "iteration": 10,
+          "rayleigh": 140.97100830078125,
+          "relative_residual": 0.00028070088592357934
+        },
+        {
+          "iteration": 11,
+          "rayleigh": 140.97100830078125,
+          "relative_residual": 7.453455327777192e-05
+        },
+        {
+          "iteration": 12,
+          "rayleigh": 140.97100830078125,
+          "relative_residual": 1.9796876586042345e-05
+        }
+      ],
+      "scope": "Fixed training probe, data-loss Hessian; no optimizer, clipping or decay Jacobian."
+    },
+    "lr_times_curvature": 39.74162041168269,
+    "epsilon_relative_disagreement": 0.05454545454545454
+  },
+  {
+    "label": "lr-0.3-late",
+    "peak_lr": 0.3,
+    "phase": "late",
+    "update": 2000,
+    "checkpoint": "/vol/checkpoints/pretraining_experiments/sgd_stability/sgd-stability-87b9a2c0cec8/sgd-batch-16384-lr-0.3/step-002000.pt",
+    "tokens_seen": 32768000,
+    "actual_lr": 0.03,
+    "dataset_identity": {
+      "manifest_sha256": "914bb1a0fe4adfc52f474a5f4dccea636b16242ffdc0b2cfa14a02adab54501d",
+      "corpus_id": "ff43d7752a904b649fad5b2d2dbb4df3",
+      "sql_dir": "/vol/bpe_tokenization/pretrain_data",
+      "tokenizer_sha256": "05b8bb66ea18f8328e785424de06fd6653c9147a7dbe686a4dd1627e224e85a1",
+      "vocab_size": 32768,
+      "token_counts": {
+        "english_train": 9238968483,
+        "english_val": 1026673344,
+        "sql_train": 7830836989,
+        "sql_val": 610246589
+      }
+    },
+    "probe_targets": [
+      1255,
+      77
+    ],
+    "precision": "FP32 parameters and math SDPA; TF32 disabled",
+    "slice": {
+      "direction_norm": 0.02988903425152481,
+      "points": [
+        {
+          "alpha": -0.08,
+          "loss": 8.089750289916992
+        },
+        {
+          "alpha": -0.04,
+          "loss": 7.637226581573486
+        },
+        {
+          "alpha": -0.02,
+          "loss": 7.587104320526123
+        },
+        {
+          "alpha": -0.01,
+          "loss": 7.582818031311035
+        },
+        {
+          "alpha": 0.0,
+          "loss": 7.587034702301025
+        },
+        {
+          "alpha": 0.01,
+          "loss": 7.597192287445068
+        },
+        {
+          "alpha": 0.02,
+          "loss": 7.611545562744141
+        },
+        {
+          "alpha": 0.04,
+          "loss": 7.648504734039307
+        },
+        {
+          "alpha": 0.08,
+          "loss": 7.740630626678467
+        }
+      ],
+      "curvatures": [
+        {
+          "epsilon": 0.01,
+          "kappa": 59.409141540527344,
+          "second_difference": 0.005940914154052734
+        },
+        {
+          "epsilon": 0.02,
+          "kappa": 61.45119667053223,
+          "second_difference": 0.02458047866821289
+        }
+      ]
+    },
+    "hessian": {
+      "dominant_eigenvalue_estimate": 240.9553985595703,
+      "lambda_max_estimate": 240.9553985595703,
+      "positive_dominant": true,
+      "converged_residual_5pct": true,
+      "relative_residual": 0.02749701775610447,
+      "iterations": [
+        {
+          "iteration": 1,
+          "rayleigh": 0.0008593354723416269,
+          "relative_residual": 0.9999943971633911
+        },
+        {
+          "iteration": 2,
+          "rayleigh": 18.72416877746582,
+          "relative_residual": 0.941429853439331
+        },
+        {
+          "iteration": 3,
+          "rayleigh": 180.02012634277344,
+          "relative_residual": 0.4522653818130493
+        },
+        {
+          "iteration": 4,
+          "rayleigh": 230.85015869140625,
+          "relative_residual": 0.10560285300016403
+        },
+        {
+          "iteration": 5,
+          "rayleigh": 234.7244415283203,
+          "relative_residual": 0.06291837990283966
+        },
+        {
+          "iteration": 6,
+          "rayleigh": 236.40602111816406,
+          "relative_residual": 0.051939457654953
+        },
+        {
+          "iteration": 7,
+          "rayleigh": 237.60879516601562,
+          "relative_residual": 0.0460284948348999
+        },
+        {
+          "iteration": 8,
+          "rayleigh": 238.5688018798828,
+          "relative_residual": 0.0415390245616436
+        },
+        {
+          "iteration": 9,
+          "rayleigh": 239.3549041748047,
+          "relative_residual": 0.0375884547829628
+        },
+        {
+          "iteration": 10,
+          "rayleigh": 239.9999542236328,
+          "relative_residual": 0.03395814821124077
+        },
+        {
+          "iteration": 11,
+          "rayleigh": 240.52711486816406,
+          "relative_residual": 0.03059788979589939
+        },
+        {
+          "iteration": 12,
+          "rayleigh": 240.9553985595703,
+          "relative_residual": 0.02749701775610447
+        }
+      ],
+      "scope": "Fixed training probe, data-loss Hessian; no optimizer, clipping or decay Jacobian."
+    },
+    "lr_times_curvature": 7.228661956787109,
+    "epsilon_relative_disagreement": 0.03323051853576209
+  }
+]

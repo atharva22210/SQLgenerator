@@ -14,7 +14,7 @@ import time
 import uuid
 
 from training.errors import NumericalDivergence
-from training.checkpointing import restore_checkpoint, save_checkpoint
+from training.checkpointing import restore_checkpoint, restore_branch, save_checkpoint
 from training.dataset import dataset_identity
 from training.tracking import curve_payload, define_metrics, log_update
 from training.config import DATA_DIR, TrainConfig, _load_data_and_tokenizer, learning_rate, volume
@@ -63,7 +63,9 @@ def _checkpoint_path(run_name: str) -> Path:
 def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: str, *,
          output_dir: Path | None = None, group: str | None = None, title: str | None = None,
          expected_dataset: dict | None = None, milestone_updates: tuple[int, ...] = (),
-         stop_after_update: int | None = None, x_axis: str = 'optimizer_update') -> dict:
+         stop_after_update: int | None = None, x_axis: str = 'optimizer_update',
+         probe_every: int = 0, probe_seed: int = 23456,
+         branch_from: Path | None = None, record_sample_hashes: bool = False) -> dict:
     """Train/resume one case; each microbatch contributes its valid-target share.
 
     output_dir isolates suite checkpoints; None preserves historical packing paths.
@@ -71,10 +73,20 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
     retains selected snapshots in addition to latest.pt. stop_after_update pauses
     a bounded correctness run without changing max_steps or its LR trajectory.
     x_axis selects update- or token-based plots without changing optimization.
+    probe_every enables a fixed training-batch loss diagnostic; 0 disables it.
+    probe_seed uses an independent sampler. The recipe is checkpointed and must
+    remain identical on resume. Enabled probes also retain actual update vectors
+    at milestone_updates, for later directional curvature/branching work.
     The result/history/config files are durable outputs, not fabricated metrics.
+    branch_from explicitly forks a retained checkpoint into a new output directory,
+    permitting only constant-LR schedule/length changes. Ordinary resume stays
+    strict. record_sample_hashes verifies actual future input equality across arms.
     """
     if x_axis not in {'optimizer_update', 'tokens_seen'}:
         raise ValueError('x_axis must be optimizer_update or tokens_seen')
+    if (isinstance(probe_every, bool) or not isinstance(probe_every, int) or probe_every < 0
+            or isinstance(probe_seed, bool) or not isinstance(probe_seed, int) or probe_seed < 0):
+        raise ValueError('Probe interval and seed must be nonnegative integers')
     import torch
     import wandb
     from data.dataloader import make_batch
@@ -92,6 +104,23 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
     path = _checkpoint_path(run_name) if output_dir is None else output_dir / 'latest.pt'
     path.parent.mkdir(parents=True, exist_ok=True)
     state = torch.load(path, map_location='cpu', weights_only=False) if path.is_file() else None
+    forking = branch_from is not None and state is None
+    if branch_from is not None:
+        if output_dir is None or path.parent.resolve() == branch_from.parent.resolve():
+            raise ValueError('A branch needs its own output directory')
+        if forking:
+            state = torch.load(branch_from, map_location='cpu', weights_only=False)
+        elif (state.get('branch_origin') or {}).get('checkpoint') != str(branch_from):
+            raise ValueError('Resume branch source differs from the checkpoint')
+    probe_recipe = {'every': probe_every, 'seed': probe_seed} if probe_every else {}
+    if state and not forking and state.get('probe_recipe', {}) != probe_recipe:
+        raise ValueError('Fixed probe recipe differs from the checkpoint')
+    branch_origin = state.get('branch_origin') if state and not forking else None
+    if forking:
+        if not probe_every or state.get('probe_recipe', {}).get('seed') != probe_seed:
+            raise ValueError('Branch must retain the saved fixed-probe seed')
+        branch_origin = {'checkpoint': str(branch_from), 'update': state['update'],
+                         'tokens_seen': state['cumulative_tokens'], 'source_config': state['config']}
     if state is not None and not state.get('grouped_sql_dir'):
         raise ValueError('Checkpoint predates Grouped SQL; use a new run name')
     saved_dir = Path(state['grouped_sql_dir']) if state else None
@@ -106,22 +135,54 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
     torch.cuda.manual_seed_all(config.seed)
     rng = random.Random(config.seed)
     device = torch.device('cuda')
+    # Construction uses its own Python sampler and never advances rng. Saving
+    # the CPU batch lets future probes use exactly these token IDs and masks.
+    probe = None
+    if probe_every:
+        if branch_from is not None:
+            saved_probe = torch.load(branch_from.parent / 'fixed_probe.pt', map_location='cpu', weights_only=False)
+            if saved_probe['dataset_identity'] != identity:
+                raise ValueError('Saved probe data differs from the branch data')
+            probe = saved_probe['batch']
+        else:
+            probe = [make_batch(train, mode=config.mode, batch_size=1,
+                            seq_len=config.seq_len, sql_fraction=config.sql_fraction,
+                            pad_id=tokenizer.pad_token_id, rng=random.Random(probe_seed + offset),
+                            validation_kind=kind)
+                 for kind, offset in (('english', 10000), ('sql', 20000))]
+        torch.save({'batch': probe, 'recipe': probe_recipe, 'dataset_identity': identity},
+                   path.parent / 'fixed_probe.pt')
     model = Transformer(TransformerConfig(vocab_size=len(tokenizer), max_seq_len=config.seq_len,
                                         initializer_range=config.initializer_range)).to(device)
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
     optimizer = build_optimizer(model, config)
     start_update, cumulative_tokens, wandb_id, history = 0, 0, uuid.uuid4().hex, []
-    if state:
+    sample_hashes = []
+    if forking:
+        restore_branch(state, model, optimizer, config, rng)
+    elif state:
         restore_checkpoint(state, model, optimizer, config, rng)
         if config.optimizer == 'adamw':  # Older checkpoints may predate fused AdamW.
             for param_group in optimizer.param_groups:
                 param_group['fused'] = True
         start_update, cumulative_tokens = state['update'], state['cumulative_tokens']
         wandb_id, history = state['wandb_id'], state.get('history', [])
+        sample_hashes = state.get('sample_hashes', [])
+        if record_sample_hashes and len(sample_hashes) != start_update:
+            raise ValueError('Branch replay lacks its sampled-input hash prefix')
     del state  # CPU checkpoint tensors need not remain live during training.
     settings = {**asdict(config), 'parameter_count': parameter_count, 'dataset_identity': identity,
                 'gpu': torch.cuda.get_device_name(), 'compute_dtype': 'bfloat16',
-                'parameter_dtype': 'float32', 'checkpoint_name': run_name}
+                'parameter_dtype': 'float32', 'checkpoint_name': run_name, 'probe_recipe': probe_recipe,
+                'branch_origin': branch_origin}
+    initial_probe_loss = None
+    if branch_origin is not None:
+        from training.probes import fixed_batch_loss
+        initial_probe_loss = branch_origin.get('initial_probe_loss')
+        if initial_probe_loss is None:
+            initial_probe_loss = fixed_batch_loss(model, probe, config, device)
+            branch_origin['initial_probe_loss'] = initial_probe_loss
+        settings['initial_probe_loss'] = initial_probe_loss
     (path.parent / 'settings.json').write_text(json.dumps(settings, indent=2))
     print(json.dumps({'run': run_name, 'resume_after_update': start_update, **settings}), flush=True)
     # Rewrite only the committed prefix on resume. An interrupted attempt may
@@ -142,10 +203,16 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr * param_group.get('lr_scale', 1.0)
             optimizer.zero_grad(set_to_none=True)
+            before = ({name: p.detach().clone() for name, p in model.named_parameters()}
+                      if probe_every and update in milestone_updates else None)
             batches = [make_batch(train, mode=config.mode, batch_size=config.micro_batch_size,
                                   seq_len=config.seq_len, sql_fraction=config.sql_fraction,
                                   pad_id=tokenizer.pad_token_id, rng=rng)
                        for _ in range(config.grad_accum_steps)]
+            sample_hash = None
+            if record_sample_hashes:
+                from training.probes import batch_fingerprint
+                sample_hash = batch_fingerprint(batches)
             target_count = sum(batch.predicted_tokens for batch in batches)
             weighted_loss = torch.zeros((), device=device)
             for batch in batches:
@@ -165,6 +232,11 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
                     raise  # Do not label OOMs or unrelated runtime bugs as LR divergence.
                 raise NumericalDivergence(update, str(error)) from error
             optimizer.step()
+            direction = None
+            if before is not None:
+                from training.probes import update_direction
+                direction = update_direction(model, before)
+                del before
             # One combined scalar read waits for completed GPU work; none occurs
             # between microbatches. Timing excludes validation, checkpoint IO, W&B.
             logged_loss, logged_grad_norm = torch.stack((weighted_loss, grad_norm)).tolist()
@@ -186,14 +258,32 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
                        'perf/peak_reserved_gib': torch.cuda.max_memory_reserved() / 1024**3}
             if config.optimizer == 'muon':
                 metrics['train/companion_lr'] = optimizer.adamw.param_groups[0]['lr']
+            if probe_every:
+                metrics['train/clipped'] = int(logged_grad_norm > config.grad_clip)
+                if update == 1 or update % probe_every == 0 or update == final_update:
+                    from training.probes import fixed_batch_loss
+                    metrics['probe/fixed_loss'] = fixed_batch_loss(model, probe, config, device)
+                    if not math.isfinite(metrics['probe/fixed_loss']):
+                        raise NumericalDivergence(update, 'nonfinite fixed-probe loss')
             evaluate = update % config.eval_every == 0 or update == final_update
             if evaluate:
                 metrics.update(_evaluate(model, validation, config, tokenizer.pad_token_id, device))
+                if any(not math.isfinite(metrics[key]) for key in ('val/sql_loss', 'val/english_loss')):
+                    raise NumericalDivergence(update, 'nonfinite validation loss')
             log_update(run, update, metrics, history, output)
+            if record_sample_hashes:
+                sample_hashes.append(sample_hash)
+                # Also retain successful input identities if a later numerical
+                # failure exits before the next full-state checkpoint.
+                temporary = path.parent / 'sample_hashes.tmp'
+                temporary.write_text(json.dumps(sample_hashes))
+                temporary.replace(path.parent / 'sample_hashes.json')
             if evaluate or update in milestone_updates:
                 output.flush()
                 save_checkpoint(path, model, optimizer, config, update, rng, cumulative_tokens,
-                                wandb_id, grouped_sql_dir, history=history, dataset=identity)
+                                wandb_id, grouped_sql_dir, history=history, dataset=identity,
+                                update_direction=direction, probe_recipe=probe_recipe,
+                                branch_origin=branch_origin, sample_hashes=sample_hashes)
                 if update in milestone_updates:
                     shutil.copyfile(path, path.with_name(f'step-{update:06d}.pt'))
                 volume.commit()
@@ -207,7 +297,9 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
         result = {'run': run_name, 'updates': final_update, 'completed': final_update == config.max_steps,
                   'parameter_count': parameter_count, 'checkpoint': str(path), 'wandb_url': run.url,
                   'wandb_path': run.path, 'dataset_identity': identity,
-                  'config': asdict(config), 'history': history}
+                  'config': asdict(config), 'history': history, 'probe_recipe': probe_recipe,
+                  'branch_origin': branch_origin, 'sample_hashes': sample_hashes,
+                  'initial_probe_loss': initial_probe_loss}
     # The W&B context has finished/flushed before an API verifier reads the run.
     (path.parent / 'result.json').write_text(json.dumps(result, indent=2))
     volume.commit()

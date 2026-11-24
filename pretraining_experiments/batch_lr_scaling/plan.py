@@ -2,19 +2,19 @@
 from dataclasses import asdict
 from training.config import TrainConfig
 
-TOKEN_BUDGET = 131_072_000
+TOKEN_BUDGET = 32_768_000  # Quarter of the preceding 131.072M-token comparison.
 MICROBATCH = 4
 CONTEXT = 4096
-BATCHES = (16_384, 65_536, 262_144, 524_288)
-LEARNING_RATES = (3e-4, 1e-3, 3e-3, 6e-3)
-EVAL_TOKENS = 8_388_608
+BATCHES = (32_768, 65_536)
+LEARNING_RATES = (1e-4, 3e-4, 1e-3)
+EVAL_TOKENS = 2_097_152
 
 
 def experiment_plan(batch_sizes=BATCHES, learning_rates=LEARNING_RATES) -> list[dict]:
     """Return cases with matching total slots, validation tokens, and microbatch stream.
 
     Batch size means tokens per optimizer update, not per GPU forward. Every case
-    consumes 8000 microbatches of 4×4096 slots; accumulation only changes how they
+    consumes 2000 microbatches of 4×4096 slots; accumulation only changes how they
     are grouped into updates. The seed-1 sampler is independent of the optimizer.
     Warmup is 10% of each run's update count, not a common number of updates.
     """

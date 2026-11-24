@@ -1,0 +1,280 @@
+{
+  "token_budget": 32768000,
+  "dataset_identity": {
+    "manifest_sha256": "914bb1a0fe4adfc52f474a5f4dccea636b16242ffdc0b2cfa14a02adab54501d",
+    "corpus_id": "ff43d7752a904b649fad5b2d2dbb4df3",
+    "sql_dir": "/vol/bpe_tokenization/pretrain_data",
+    "tokenizer_sha256": "05b8bb66ea18f8328e785424de06fd6653c9147a7dbe686a4dd1627e224e85a1",
+    "vocab_size": 32768,
+    "token_counts": {
+      "english_train": 9238968483,
+      "english_val": 1026673344,
+      "sql_train": 7830836989,
+      "sql_val": 610246589
+    }
+  },
+  "records": [
+    {
+      "case": "batch-32768-lr-0.0001",
+      "batch_tokens": 32768,
+      "peak_lr": 0.0001,
+      "status": "completed",
+      "sql_loss": 2.197655439376831,
+      "english_loss": 6.400445461273193,
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-batch-lr-scaling/runs/1a6ce5c5f9384831b7a181f80a1a5f4c"
+    },
+    {
+      "case": "batch-32768-lr-0.0003",
+      "batch_tokens": 32768,
+      "peak_lr": 0.0003,
+      "status": "completed",
+      "sql_loss": 1.5368144512176514,
+      "english_loss": 5.788604736328125,
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-batch-lr-scaling/runs/f8a7476d82c443308207159bc7ff8296"
+    },
+    {
+      "case": "batch-32768-lr-0.001",
+      "batch_tokens": 32768,
+      "peak_lr": 0.001,
+      "status": "completed",
+      "sql_loss": 1.0828136205673218,
+      "english_loss": 5.316529750823975,
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-batch-lr-scaling/runs/77826f90066344cbbe747e0cef911548"
+    },
+    {
+      "case": "batch-65536-lr-0.0001",
+      "batch_tokens": 65536,
+      "peak_lr": 0.0001,
+      "status": "completed",
+      "sql_loss": 2.579615354537964,
+      "english_loss": 6.739924907684326,
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-batch-lr-scaling/runs/3afc988550c14c3fbac8cb9ab11a345e"
+    },
+    {
+      "case": "batch-65536-lr-0.0003",
+      "batch_tokens": 65536,
+      "peak_lr": 0.0003,
+      "status": "completed",
+      "sql_loss": 1.8750325441360474,
+      "english_loss": 6.079097747802734,
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-batch-lr-scaling/runs/b192d4cd22d54fd6aacd82a9df51b3e6"
+    },
+    {
+      "case": "batch-65536-lr-0.001",
+      "batch_tokens": 65536,
+      "peak_lr": 0.001,
+      "status": "completed",
+      "sql_loss": 1.3552792072296143,
+      "english_loss": 5.601100444793701,
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-batch-lr-scaling/runs/52aee8c6d0d1462094789f252ab14631"
+    }
+  ],
+  "best_tested_sql": [
+    {
+      "case": "batch-32768-lr-0.001",
+      "batch_tokens": 32768,
+      "peak_lr": 0.001,
+      "status": "completed",
+      "sql_loss": 1.0828136205673218,
+      "english_loss": 5.316529750823975,
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-batch-lr-scaling/runs/77826f90066344cbbe747e0cef911548"
+    },
+    {
+      "case": "batch-65536-lr-0.001",
+      "batch_tokens": 65536,
+      "peak_lr": 0.001,
+      "status": "completed",
+      "sql_loss": 1.3552792072296143,
+      "english_loss": 5.601100444793701,
+      "wandb_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-batch-lr-scaling/runs/52aee8c6d0d1462094789f252ab14631"
+    }
+  ],
+  "suite": "batch-lr-bfd9633ebee9",
+  "comparison_url": "https://forge.coreweave.com/wandb/dkbsingh7-iit-delhi/sqlgen-batch-lr-scaling/runs/6zswayk3",
+  "diagnostics": [
+    {
+      "run": "batch-32768-lr-0.0001",
+      "batch_tokens": 32768,
+      "peak_lr": 0.0001,
+      "final_sql_loss": 2.197655439376831,
+      "final_english_loss": 6.400445461273193,
+      "predicted_targets": 32736263,
+      "sql_token_fraction": 0.6283450317382813,
+      "training_update_seconds": 495.32227223699937,
+      "training_tokens_per_second": 66154.90931189407,
+      "wandb_runtime_seconds": 701,
+      "clipped_updates": 871,
+      "clip_fraction": 0.871,
+      "median_grad_norm": 1.1801085472106934,
+      "max_grad_norm": 7.950386047363281,
+      "max_grad_update": 2,
+      "peak_allocated_gib": 3.549513816833496,
+      "decay_only_multiplier": 0.9945643072966243
+    },
+    {
+      "run": "batch-32768-lr-0.0003",
+      "batch_tokens": 32768,
+      "peak_lr": 0.0003,
+      "final_sql_loss": 1.5368144512176514,
+      "final_english_loss": 5.788604736328125,
+      "predicted_targets": 32736263,
+      "sql_token_fraction": 0.6283450317382813,
+      "training_update_seconds": 494.7073055229983,
+      "training_tokens_per_second": 66237.14595311684,
+      "wandb_runtime_seconds": 700,
+      "clipped_updates": 248,
+      "clip_fraction": 0.248,
+      "median_grad_norm": 0.8025977611541748,
+      "max_grad_norm": 7.923649311065674,
+      "max_grad_update": 2,
+      "peak_allocated_gib": 3.549513816833496,
+      "decay_only_multiplier": 0.9837812844614847
+    },
+    {
+      "run": "batch-32768-lr-0.001",
+      "batch_tokens": 32768,
+      "peak_lr": 0.001,
+      "final_sql_loss": 1.0828136205673218,
+      "final_english_loss": 5.316529750823975,
+      "predicted_targets": 32736263,
+      "sql_token_fraction": 0.6283450317382813,
+      "training_update_seconds": 500.4093053299965,
+      "training_tokens_per_second": 65482.395413072976,
+      "wandb_runtime_seconds": 695,
+      "clipped_updates": 106,
+      "clip_fraction": 0.106,
+      "median_grad_norm": 0.5045136213302612,
+      "max_grad_norm": 8.251522064208984,
+      "max_grad_update": 30,
+      "peak_allocated_gib": 3.549391746520996,
+      "decay_only_multiplier": 0.9469518956225246
+    },
+    {
+      "run": "batch-65536-lr-0.0001",
+      "batch_tokens": 65536,
+      "peak_lr": 0.0001,
+      "final_sql_loss": 2.579615354537964,
+      "final_english_loss": 6.739924907684326,
+      "predicted_targets": 32736263,
+      "sql_token_fraction": 0.6283450317382813,
+      "training_update_seconds": 489.84294923299893,
+      "training_tokens_per_second": 66894.90999372037,
+      "wandb_runtime_seconds": 681,
+      "clipped_updates": 331,
+      "clip_fraction": 0.662,
+      "median_grad_norm": 1.098297357559204,
+      "max_grad_norm": 8.416451454162598,
+      "max_grad_update": 50,
+      "peak_allocated_gib": 3.549513816833496,
+      "decay_only_multiplier": 0.9972782009119109
+    },
+    {
+      "run": "batch-65536-lr-0.0003",
+      "batch_tokens": 65536,
+      "peak_lr": 0.0003,
+      "final_sql_loss": 1.8750325441360474,
+      "final_english_loss": 6.079097747802734,
+      "predicted_targets": 32736263,
+      "sql_token_fraction": 0.6283450317382813,
+      "training_update_seconds": 491.9718254050008,
+      "training_tokens_per_second": 66605.44020589947,
+      "wandb_runtime_seconds": 696,
+      "clipped_updates": 111,
+      "clip_fraction": 0.222,
+      "median_grad_norm": 0.7764800190925598,
+      "max_grad_norm": 8.541116714477539,
+      "max_grad_update": 29,
+      "peak_allocated_gib": 3.549391746520996,
+      "decay_only_multiplier": 0.991856748117508
+    },
+    {
+      "run": "batch-65536-lr-0.001",
+      "batch_tokens": 65536,
+      "peak_lr": 0.001,
+      "final_sql_loss": 1.3552792072296143,
+      "final_english_loss": 5.601100444793701,
+      "predicted_targets": 32736263,
+      "sql_token_fraction": 0.6283450317382813,
+      "training_update_seconds": 492.1604479820005,
+      "training_tokens_per_second": 66579.91338872969,
+      "wandb_runtime_seconds": 684,
+      "clipped_updates": 59,
+      "clip_fraction": 0.118,
+      "median_grad_norm": 0.47909750044345856,
+      "max_grad_norm": 14.428191184997559,
+      "max_grad_update": 20,
+      "peak_allocated_gib": 3.549391746520996,
+      "decay_only_multiplier": 0.9731121008535109
+    }
+  ],
+  "checkpoint_index": {
+    "checkpoints": {
+      "batch-32768-lr-0.0001": {
+        "warmup_end": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-32768-lr-0.0001/step-000100.pt",
+        "midpoint": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-32768-lr-0.0001/step-000500.pt",
+        "final": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-32768-lr-0.0001/step-001000.pt"
+      },
+      "batch-32768-lr-0.0003": {
+        "warmup_end": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-32768-lr-0.0003/step-000100.pt",
+        "midpoint": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-32768-lr-0.0003/step-000500.pt",
+        "final": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-32768-lr-0.0003/step-001000.pt"
+      },
+      "batch-32768-lr-0.001": {
+        "warmup_end": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-32768-lr-0.001/step-000100.pt",
+        "midpoint": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-32768-lr-0.001/step-000500.pt",
+        "final": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-32768-lr-0.001/step-001000.pt"
+      },
+      "batch-65536-lr-0.0001": {
+        "warmup_end": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-65536-lr-0.0001/step-000050.pt",
+        "midpoint": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-65536-lr-0.0001/step-000250.pt",
+        "final": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-65536-lr-0.0001/step-000500.pt"
+      },
+      "batch-65536-lr-0.0003": {
+        "warmup_end": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-65536-lr-0.0003/step-000050.pt",
+        "midpoint": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-65536-lr-0.0003/step-000250.pt",
+        "final": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-65536-lr-0.0003/step-000500.pt"
+      },
+      "batch-65536-lr-0.001": {
+        "warmup_end": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-65536-lr-0.001/step-000050.pt",
+        "midpoint": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-65536-lr-0.001/step-000250.pt",
+        "final": "/vol/checkpoints/pretraining_experiments/batch_lr_scaling/batch-lr-bfd9633ebee9/batch-65536-lr-0.001/step-000500.pt"
+      }
+    },
+    "state_contents": [
+      "model",
+      "optimizer",
+      "config",
+      "model_config",
+      "python_rng",
+      "torch_rng",
+      "cuda_rng",
+      "cumulative_tokens",
+      "history",
+      "dataset_identity"
+    ],
+    "validation_recipe": {
+      "seed": 12345,
+      "english_seed_offset": 10000,
+      "sql_seed_offset": 20000,
+      "documents_per_corpus": 128,
+      "seq_len": 4096,
+      "mode": "pad"
+    },
+    "notes": [
+      "Use training.checkpointing.restore_checkpoint with unchanged settings to resume.",
+      "Later LR branches require explicit configuration override support; not launched here.",
+      "No recent parameter-update vector is stored; reconstruct a direction in a later probe.",
+      "Keep the pinned corpus and tokenizer available; RNG replay needs the same files."
+    ]
+  },
+  "sanity_checks": {
+    "completed": 6,
+    "finite_contiguous_histories": true,
+    "validation_observations_per_corpus": 16,
+    "predicted_targets_per_case": 32736263,
+    "all_tracking_checks_passed": true,
+    "all_retained_checkpoints_exist": true,
+    "paired_batch_target_and_sql_token_counts_match": true
+  },
+  "timing_note": "Update timing excludes evaluation, checkpoint IO and W&B. W&B runtime is SDK lifetime, not invoice or full container lifetime."
+}

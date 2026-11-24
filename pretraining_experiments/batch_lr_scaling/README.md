@@ -6,21 +6,19 @@ Experiment 8. Code and takeaways are organized by subject, not by day.
 
 ## Fixed design
 
-Every completed case consumes **131,072,000 non-padding input tokens**, matching
-the preceding schedule experiment. The planned 16 cases total 2,097,152,000 input
+Every completed case consumes **32,768,000 non-padding input tokens**, one quarter
+of the preceding schedule experiment. The six cases total **196,608,000** input
 token slots, plus validation. This is not a promise that all cases fit a particular
 credit balance. Review the selected grid and available compute before launching.
 
 | Tokens per optimizer update | Microbatch | Context | Accumulation | Updates | Warmup updates |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 16,384 | 4 | 4096 | 1 | 8000 | 800 |
-| 65,536 | 4 | 4096 | 4 | 2000 | 200 |
-| 262,144 | 4 | 4096 | 16 | 500 | 50 |
-| 524,288 | 4 | 4096 | 32 | 250 | 25 |
+| 32,768 | 4 | 4096 | 2 | 1000 | 100 |
+| 65,536 | 4 | 4096 | 4 | 500 | 50 |
 
-For every row, test peak LRs **3e-4, 1e-3, 3e-3, 6e-3**. Use cosine decay with
+For every row, test peak LRs **1e-4, 3e-4, 1e-3**. Use cosine decay with
 10% warmup and minimum LR 0.1 × that case's peak. Unlike a fixed warmup-step
-count, these settings spend the same 13,107,200 input tokens warming up.
+count, these settings spend the same 3,276,800 input tokens warming up.
 All phase lengths here are integers; no rounding is required.
 
 All cases use the same model (6 layers, width 512, FFN 1408, 8 query/4 KV heads,
@@ -30,7 +28,7 @@ Training seed is 1; validation seed is 12345. The coordinator resolves the lates
 completed English/SQL manifests once, and each worker verifies that pinned
 identity. The vocabulary/tokenizer checks are shared with the previous experiment.
 
-Each case consumes 8000 microbatches of 4×4096 slots. The Python sampling RNG is
+Each case consumes 2000 microbatches of 4×4096 slots. The Python sampling RNG is
 independent of optimization and validation, so changing accumulation groups the
 same intended microbatch stream into different updates. It does not require more
 GPUs. GPU arithmetic is not assumed bit-identical; same-seed drift was observed
@@ -45,9 +43,9 @@ boundary masks make them smaller than the input-token budget. Different training
 seeds are not swept here. The 0.5 SQL document-sampling probability does not imply
 50% SQL tokens; the actual token fraction is logged.
 
-Evaluate the same 128 standalone documents per corpus every **8,388,608 input
+Evaluate the same 128 standalone documents per corpus every **2,097,152 input
 tokens**, plus the final budget. This yields 16 validation observations per corpus
-for every case. In update units, the intervals are 512,128,32,16 respectively.
+for every case. In update units, the intervals are 64 and 32 respectively.
 Evaluating every 50 updates instead would compare different token exposure and
 charge large-batch cases for far more evaluation per training token.
 
@@ -78,10 +76,10 @@ Preview a selected subset using the exact numeric batch sizes/LRs:
 
 ```bash
 uv run --locked python -m pretraining_experiments.batch_lr_scaling.launch \
-  --batch-sizes 16384,65536 --learning-rates 0.0003,0.001
+  --batch-sizes 32768,65536 --learning-rates 0.0003,0.001
 ```
 
-**Future execution command** (not run as part of implementation):
+**Execution command** (explicitly launches six runs):
 
 ```bash
 uv run --locked modal run --detach --env main --profile sanika-05 \
@@ -98,7 +96,8 @@ Use local correctness tests before deciding whether any GPU preflight is needed.
 The coordinator remains detached from the laptop. Each case receives an isolated
 directory under `/vol/checkpoints/pretraining_experiments/batch_lr_scaling/<suite>`.
 The plan, dataset identity, raw metrics, settings, result and latest checkpoint
-are saved. Warmup-end snapshots are retained. Full-state checkpoint restoration
+are saved. Snapshots at warmup end, midpoint and finish are retained. `checkpoint_index.json`
+indexes them and records the validation replay recipe for later experiments. Full-state checkpoint restoration
 reuses the optimizer, sampler and CPU/CUDA RNG states; it cannot change LR/batch
 configuration while pretending to resume the same experiment.
 
@@ -118,13 +117,13 @@ The comparison run includes:
    rather than being replaced with a made-up large number or zero.
 
 Training/LR overview charts sample up to 401 points per case to avoid silently
-exceeding W&B table limits across all 16 runs. All sparse validation observations
+exceeding W&B table limits across the six runs. All sparse validation observations
 and original raw scalar histories are retained. Final results use the final
 matched-budget checkpoint, not each run's best checkpoint at unequal budgets.
 
 `analysis.json` and `takeaways.md` record the measured grid and the best tested
 LR for each batch. A selected subset is labeled by its actual rows; it does not
-stand in for a completed full sweep. A winner at an LR-grid edge is a reason to
+stand in for a completed six-cell screen. A winner at an LR-grid edge is a reason to
 extend the grid later, not proof of an optimum or an exact critical batch size.
 One seed and a reused sampled validation set do not establish significance or
 SQL execution accuracy. Gradient noise and curvature are not directly measured.
@@ -140,3 +139,31 @@ Tests verify batch/budget arithmetic, proportional warmup, token-aligned LR and
 validation, default no-submission behavior, subset validation, divergence handling,
 rejection of mismatched data/settings/budgets, and token-based chart table limits.
 The tests do not launch Modal functions, GPUs, or online W&B runs.
+
+## Reuse in later experiments
+
+The early/mid/final snapshots include weights, Adam moments, architecture and
+training settings, sampler and CPU/CUDA RNG states, token count, dataset identity
+and committed metric history. Warmup/midpoint snapshots share token coordinates
+across batch sizes (3.2768M and 16.384M). The final state is at 32.768M.
+`latest.pt` is refreshed at validation points for interrupted-run recovery.
+All durable artifacts stay beside this experiment on the Modal Volume.
+
+Use a saved state for later curvature probes or controlled continuations. No
+curvature job, LR branch, fine-tuning or 135M run is launched by this screen.
+Changing the LR on resume requires explicit branch support; ordinary resume
+checks require unchanged configuration. A recent parameter-update vector is
+not saved; a later probe must reconstruct its direction. Preserve the pinned
+corpus and tokenizer to reproduce the recorded sampler/validation recipes.
+
+The six-cell screen tests a local batch/LR interaction. It cannot locate a
+critical batch size across the former four-batch range. Short-run winners need
+confirmation at the full horizon. The existing 0.5 SQL *document* probability
+is preserved from earlier experiments; it is not a new 50/50-by-token mixer.
+
+Before launch, local tests use the real W&B SDK in offline mode to serialize all
+four per-run chart tables and all six-case comparison plots. After training,
+the CPU coordinator checks uploaded scalar histories and chart row counts.
+Those checks verify chart data, not browser rendering. No extra online smoke
+run or GPU preflight is created. Native curves stream during training; explicit
+per-run charts appear at run completion and comparison charts after the suite.

@@ -32,7 +32,10 @@ def execute_case(case: dict, suite: str, dataset: dict, entity: str, project: st
     try:
         result = run_training(config, entity, project, case['label'], output_dir=output,
                               group=suite, title=case['label'], expected_dataset=dataset,
-                              milestone_updates=(config.warmup_steps,), x_axis='tokens_seen')
+                              # Retain early/middle/final full states for later
+                              # curvature probes and controlled continuations.
+                              milestone_updates=(config.warmup_steps, config.max_steps // 2,
+                                                 config.max_steps), x_axis='tokens_seen')
         result['status'] = 'completed'
     except NumericalDivergence as error:
         history_path = output / 'metrics.jsonl'
@@ -59,7 +62,7 @@ def train_case(case: dict, suite: str, dataset: dict, entity: str, project: str)
 def run_suite(cases: list[dict], suite: str, entity: str, project: str, max_parallel: int) -> dict:
     """Pin the data once, bound concurrent GPU calls, then analyze on CPU.
 
-    Cases can be a selected subset of the 16-cell grid. Persist every completed
+    Cases can be a selected subset of the six-cell grid. Persist every completed
     chunk so a later infrastructure failure does not erase earlier evidence.
     Concurrency changes wall time, not the total training-token budget or price
     of an individual GPU-second. No GPU is reserved for chart verification.
@@ -75,7 +78,30 @@ def run_suite(cases: list[dict], suite: str, entity: str, project: str, max_para
     root = OUTPUT_ROOT / suite
     root.mkdir(parents=True, exist_ok=True)
     (root / 'plan.json').write_text(json.dumps({'cases': cases, 'dataset': dataset,
-                                               'max_parallel': max_parallel}, indent=2))
+        'max_parallel': max_parallel,
+        'checkpoint_purpose': 'Full states at warmup end, midpoint and finish; latest at validation.',
+        'prediction': 'Lowest LR may learn slowly; best tested LR may rise with batch. Neither is guaranteed.',
+        'limitations': 'One seed; short-horizon screen; SQL sampling probability is by document, not tokens.'}, indent=2))
+    # Keep the later teaching experiments anchored to the exact data and states
+    # used here. These are reuse instructions, not additional training jobs.
+    reuse = {
+        'checkpoints': {case['label']: {
+            phase: str(root / case['label'] / f'step-{update:06d}.pt')
+            for phase, update in (('warmup_end', case['train']['warmup_steps']),
+                                  ('midpoint', case['train']['max_steps'] // 2),
+                                  ('final', case['train']['max_steps']))}
+            for case in cases},
+        'state_contents': ['model', 'optimizer', 'config', 'model_config', 'python_rng',
+                           'torch_rng', 'cuda_rng', 'cumulative_tokens', 'history', 'dataset_identity'],
+        'validation_recipe': {'seed': 12345, 'english_seed_offset': 10000,
+                              'sql_seed_offset': 20000, 'documents_per_corpus': 128,
+                              'seq_len': 4096, 'mode': 'pad'},
+        'notes': ['Use training.checkpointing.restore_checkpoint with unchanged settings to resume.',
+                  'Later LR branches require explicit configuration override support; not launched here.',
+                  'No recent parameter-update vector is stored; reconstruct a direction in a later probe.',
+                  'Keep the pinned corpus and tokenizer available; RNG replay needs the same files.'],
+    }
+    (root / 'checkpoint_index.json').write_text(json.dumps(reuse, indent=2))
     volume.commit()
     results = []
     for start in range(0, len(cases), max_parallel):

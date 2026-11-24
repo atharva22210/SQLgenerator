@@ -2,6 +2,32 @@
 import torch
 
 
+class DecoupledSGD(torch.optim.Optimizer):
+    """Plain SGD with the same decay placement as AdamW; no momentum/adaptation.
+
+    For each parameter with a gradient: p <- (1 - lr*decay)*p - lr*g.
+    The trainer clips g first. Keeping shrinkage outside that gradient matches
+    AdamW; PyTorch's ordinary SGD weight_decay instead adds L2 to its gradient.
+    Standard Optimizer state_dict/load_state_dict preserve LR and decay groups.
+    """
+
+    def __init__(self, params, lr):
+        super().__init__(params, dict(lr=lr, weight_decay=0.0))
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            for parameter in group['params']:
+                if parameter.grad is not None:
+                    parameter.mul_(1 - group['lr'] * group['weight_decay'])
+                    parameter.add_(parameter.grad, alpha=-group['lr'])
+        return loss
+
+
 class MuonWithAdamW:
     """Step two disjoint parameter sets together and checkpoint both histories."""
 
@@ -40,6 +66,8 @@ def build_optimizer(model, config):
     vectors = [p for p in model.parameters() if p.ndim < 2]
     groups = [{'params': matrices, 'weight_decay': config.weight_decay},
               {'params': vectors, 'weight_decay': 0.0}]
+    if config.optimizer == 'sgd':
+        return DecoupledSGD(groups, lr=config.peak_lr)
     if config.optimizer == 'momentum_sgd':
         return torch.optim.SGD(groups, lr=config.peak_lr, momentum=0.9)
 
