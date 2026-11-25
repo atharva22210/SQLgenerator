@@ -40,8 +40,9 @@ def build_optimizer(model, config):
     vectors = [p for p in model.parameters() if p.ndim < 2]
     groups = [{'params': matrices, 'weight_decay': config.weight_decay},
               {'params': vectors, 'weight_decay': 0.0}]
-    if config.optimizer == 'momentum_sgd':
-        return torch.optim.SGD(groups, lr=config.peak_lr, momentum=0.9)
+    if config.optimizer in {'sgd', 'momentum_sgd'}:
+        momentum = 0.9 if config.optimizer == 'momentum_sgd' else 0.0
+        return torch.optim.SGD(groups, lr=config.peak_lr, momentum=momentum)
 
     fused = model.token_embedding.weight.is_cuda
     if config.optimizer == 'muon':

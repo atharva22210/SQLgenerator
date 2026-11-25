@@ -5,20 +5,22 @@ import json
 from training.config import TrainConfig
 
 TOKEN_BUDGET = 32_768_000
-BATCH_TOKENS = (131_072, 262_144)
-# A factor of four between neighbors gives each optimizer the same search width.
-PEAK_RATES = {'adamw': (0.00015, 0.0006, 0.0024),
-              'momentum_sgd': (0.005, 0.02, 0.08),
-              'muon': (0.005, 0.02, 0.08)}
+BATCH_TOKENS = (32_768, 65_536)
+# Insertion order is the execution priority when funding is limited.
+# Rates bracket a candidate for each optimizer at both batch sizes.
+PEAK_RATES = {'adamw': (0.0003, 0.001, 0.003),
+              'muon': (0.01, 0.02, 0.04),
+              'momentum_sgd': (0.003, 0.01, 0.03),
+              'sgd': (0.03, 0.1, 0.3)}
 
 
 def experiment_plan():
     """Return labeled trainer configs; both batches consume 2,000 identical microbatches."""
     cases = []
     for optimizer, rates in PEAK_RATES.items():
-        for batch in BATCH_TOKENS:
-            steps = TOKEN_BUDGET // batch
-            for peak in rates:
+        for peak in (rates[1], rates[0], rates[2]):
+            for batch in BATCH_TOKENS:
+                steps = TOKEN_BUDGET // batch
                 config = TrainConfig(
                     mode='masked_pack', optimizer=optimizer, peak_lr=peak, min_lr=peak / 10,
                     weight_decay=0.0, grad_accum_steps=batch // (4 * 4096),

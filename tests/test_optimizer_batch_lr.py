@@ -14,25 +14,31 @@ from training.schedules import learning_rate, wsd_boundaries
 class OptimizerSweepTests(unittest.TestCase):
     def test_plan_and_measured_boundaries(self):
         cases = experiment_plan()
-        self.assertEqual(len({c['label'] for c in cases}), 18)
+        self.assertEqual(len({c['label'] for c in cases}), 24)
+        priority = ('adamw', 'muon', 'momentum_sgd', 'sgd')
+        self.assertEqual([case['train']['optimizer'] for case in cases],
+                         [name for name in priority for _ in range(6)])
         for case in cases:
             config = TrainConfig(**case['train'])
             batch = config.micro_batch_size * config.seq_len * config.grad_accum_steps
             self.assertEqual(batch * config.max_steps, TOKEN_BUDGET)
             warm, stable = wsd_boundaries(config)
-            self.assertEqual((warm, stable), (25, 200) if config.max_steps == 250 else (12, 100))
+            self.assertEqual((warm, stable), (100, 800) if batch == 32_768 else (50, 400))
             self.assertEqual(stable % config.eval_every, 0)
             self.assertEqual(learning_rate(warm, config), config.peak_lr)
             self.assertAlmostEqual(learning_rate(config.max_steps, config), config.min_lr)
 
     def test_next_update_after_restoring_each_optimizer(self):
-        for name in ('adamw', 'momentum_sgd', 'muon'):
+        for name in ('adamw', 'sgd', 'momentum_sgd', 'muon'):
             with self.subTest(optimizer=name):
                 model = torch.nn.Module()
                 model.token_embedding = torch.nn.Embedding(8, 4)
                 model.hidden = torch.nn.Linear(4, 4)
-                config = TrainConfig(optimizer=name, peak_lr=.02)
+                config = TrainConfig(optimizer=name, peak_lr=.02, weight_decay=0)
                 optimizer = build_optimizer(model, config)
+                if name == 'sgd':
+                    self.assertIsInstance(optimizer, torch.optim.SGD)
+                    self.assertEqual(optimizer.defaults['momentum'], 0.0)
                 for p in model.parameters():
                     p.grad = torch.ones_like(p)
                 optimizer.step()
