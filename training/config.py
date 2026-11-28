@@ -86,6 +86,8 @@ class TrainConfig:
     wsd_decay_frac: float = 0.2
     wsd_decay_type: str = "linear"
 
+    use_qk_norm: bool = False
+    ema_half_life_tokens: int = 0  # Zero disables the evaluation-only weight copy.
     optimizer: str = "adamw"
     companion_peak_lr: float = 6e-4
 
@@ -93,6 +95,8 @@ class TrainConfig:
         if (isinstance(self.initializer_range, bool)
                 or not math.isfinite(self.initializer_range) or self.initializer_range <= 0):
             raise ValueError("initializer_range must be finite and positive")
+        if self.ema_half_life_tokens < 0:
+            raise ValueError("EMA half-life must be nonnegative")
         if self.optimizer not in {"adamw", "sgd", "momentum_sgd", "muon"}:
             raise ValueError("Unknown optimizer")
         if not math.isfinite(self.companion_peak_lr) or self.companion_peak_lr <= 0:
@@ -129,7 +133,7 @@ def checkpoint_config_matches(saved: dict, current: TrainConfig) -> bool:
     Only fields introduced after the original runs receive defaults; existing
     batch, optimizer, seed and corpus choices must still match exactly.
     """
-    legacy_defaults = {"optimizer": "adamw", "companion_peak_lr": 6e-4, "initializer_range": 0.02, "validation_seed": None,
+    legacy_defaults = {"use_qk_norm": False, "ema_half_life_tokens": 0, "optimizer": "adamw", "companion_peak_lr": 6e-4, "initializer_range": 0.02, "validation_seed": None,
                        "wsd_stable_frac": 0.7, "wsd_decay_frac": 0.2, "wsd_decay_type": "linear"}
     return {**legacy_defaults, **saved} == asdict(current)
 

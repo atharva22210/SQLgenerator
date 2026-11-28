@@ -5,6 +5,7 @@ tracking settings. Launch a particular experiment from its launch.py.
 """
 from __future__ import annotations
 from dataclasses import asdict
+from copy import deepcopy
 import json
 import math
 from pathlib import Path
@@ -52,6 +53,14 @@ def _evaluate(model, corpus, config: TrainConfig, pad_id: int, device) -> dict[s
     return results
 
 
+def update_ema(shadow, model, tokens, half_life):
+    """Blend FP32 weights after a step. One half-life of tokens halves prior weight."""
+    import torch
+    with torch.no_grad():
+        torch._foreach_lerp_(list(shadow.parameters()), list(model.parameters()),
+                             1 - 2 ** (-tokens / half_life))
+
+
 def _checkpoint_path(run_name: str) -> Path:
     """Keep each run's checkpoint in a safe, distinct directory."""
     allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.'
@@ -63,13 +72,15 @@ def _checkpoint_path(run_name: str) -> Path:
 def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run_name: str, *,
          output_dir: Path | None = None, group: str | None = None, title: str | None = None,
          expected_dataset: dict | None = None, milestone_updates: tuple[int, ...] = (),
-         stop_after_update: int | None = None, x_axis: str = 'optimizer_update') -> dict:
+         stop_after_update: int | None = None, x_axis: str = 'optimizer_update',
+         probe_factory=None) -> dict:
     """Train/resume one case; each microbatch contributes its valid-target share.
 
     output_dir isolates suite checkpoints; None preserves historical packing paths.
     expected_dataset pins the published build across workers. milestone_updates
     retains selected snapshots in addition to latest.pt. stop_after_update pauses
     a bounded correctness run without changing max_steps or its LR trajectory.
+    probe_factory optionally constructs a fixed validation probe from (corpus, run directory).
     x_axis selects update- or token-based plots without changing optimization.
     The result/history/config files are durable outputs, not fabricated metrics.
     """
@@ -107,12 +118,17 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
     rng = random.Random(config.seed)
     device = torch.device('cuda')
     model = Transformer(TransformerConfig(vocab_size=len(tokenizer), max_seq_len=config.seq_len,
-                                        initializer_range=config.initializer_range)).to(device)
+                                        initializer_range=config.initializer_range,
+                                        use_qk_norm=config.use_qk_norm)).to(device)
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
     optimizer = build_optimizer(model, config)
+    shadow = deepcopy(model).requires_grad_(False) if config.ema_half_life_tokens else None
+    probe = probe_factory(validation, path.parent) if probe_factory else None
     start_update, cumulative_tokens, wandb_id, history = 0, 0, uuid.uuid4().hex, []
     if state:
         restore_checkpoint(state, model, optimizer, config, rng)
+        if shadow is not None:
+            shadow.load_state_dict(state['ema_model'])
         if config.optimizer == 'adamw':  # Older checkpoints may predate fused AdamW.
             for param_group in optimizer.param_groups:
                 param_group['fused'] = True
@@ -133,6 +149,10 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
         settings=wandb.Settings(init_timeout=120),
     ) as run:
         define_metrics(run, step_metric=x_axis)
+        if probe:
+            run.define_metric('probe/*', step_metric=x_axis)
+            if start_update == 0:
+                run.log({'tokens_seen': 0, **probe.measure(model, 0)})
         for row in history:
             output.write(json.dumps(row) + '\n')
         torch.cuda.reset_peak_memory_stats()
@@ -165,6 +185,9 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
                     raise  # Do not label OOMs or unrelated runtime bugs as LR divergence.
                 raise NumericalDivergence(update, str(error)) from error
             optimizer.step()
+            if shadow is not None:
+                tokens = sum(batch.non_pad_tokens for batch in batches)
+                update_ema(shadow, model, tokens, config.ema_half_life_tokens)
             # One combined scalar read waits for completed GPU work; none occurs
             # between microbatches. Timing excludes validation, checkpoint IO, W&B.
             logged_loss, logged_grad_norm = torch.stack((weighted_loss, grad_norm)).tolist()
@@ -187,13 +210,22 @@ def run_training(config: TrainConfig, wandb_entity: str, wandb_project: str, run
             if config.optimizer == 'muon':
                 metrics['train/companion_lr'] = optimizer.adamw.param_groups[0]['lr']
             evaluate = update % config.eval_every == 0 or update == final_update
+            if probe and (update % 25 == 0 or update == final_update):
+                metrics.update(probe.measure(model, update))
+                window_start = (update - 1) // 25 * 25
+                norms = [r['train/grad_norm'] for r in history[window_start:]]
+                norms.append(logged_grad_norm)
+                metrics['probe/clipped_fraction'] = sum(n > config.grad_clip for n in norms) / len(norms)
             if evaluate:
                 metrics.update(_evaluate(model, validation, config, tokenizer.pad_token_id, device))
+                if shadow is not None:
+                    paired = _evaluate(shadow, validation, config, tokenizer.pad_token_id, device)
+                    metrics.update({k.replace("val/", "val/ema_"): v for k, v in paired.items()})
             log_update(run, update, metrics, history, output)
             if evaluate or update in milestone_updates:
                 output.flush()
                 save_checkpoint(path, model, optimizer, config, update, rng, cumulative_tokens,
-                                wandb_id, grouped_sql_dir, history=history, dataset=identity)
+                                wandb_id, grouped_sql_dir, history=history, dataset=identity, ema_model=shadow)
                 if update in milestone_updates:
                     shutil.copyfile(path, path.with_name(f'step-{update:06d}.pt'))
                 volume.commit()
